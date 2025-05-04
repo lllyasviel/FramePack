@@ -4,6 +4,8 @@
 
 # FramePack
 
+[![lllyasviel/FramePack context](https://badge.forgithub.com/lllyasviel/FramePack)](https://uithub.com/lllyasviel/FramePack)
+
 Official implementation and desktop software for ["Packing Input Frame Context in Next-Frame Prediction Models for Video Generation"](https://lllyasviel.github.io/frame_pack_gitpage/).
 
 Links: [**Paper**](https://arxiv.org/abs/2504.12626), [**Project Page**](https://lllyasviel.github.io/frame_pack_gitpage/)
