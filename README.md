@@ -77,6 +77,26 @@ For example, to install sage-attention (linux):
 
 However, you are highly recommended to first try without sage-attention since it will influence results, though the influence is minimal.
 
+**Docker**
+
+Build Docker Image:
+
+```bash
+sudo docker build -t framepack .
+```
+
+Run Container:
+
+```bash
+sudo docekr run -it \
+--rm \
+-p 7860:7680 \
+framepack \
+python demo_gradio.py
+```
+
+Then you can use Framepack in http://localhost:7860.
+
 # GUI
 
 ![ui](https://github.com/user-attachments/assets/8c5cdbb1-b80c-4b7e-ac27-83834ac24cc4)
