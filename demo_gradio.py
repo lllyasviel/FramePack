@@ -12,6 +12,7 @@ import safetensors.torch as sf
 import numpy as np
 import argparse
 import math
+import random
 
 from PIL import Image
 from diffusers import AutoencoderKLHunyuanVideo
@@ -319,7 +320,11 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
     global stream
     assert input_image is not None, 'No input image!'
 
-    yield None, None, '', '', gr.update(interactive=False), gr.update(interactive=True)
+    if(not seed):
+        seed = random.randint(1, 2**32)
+        yield None, None, '', '', gr.update(interactive=False), gr.update(interactive=True), gr.update(value=seed)
+    else:
+        yield None, None, '', '', gr.update(interactive=False), gr.update(interactive=True), gr.skip()
 
     stream = AsyncStream()
 
@@ -332,14 +337,14 @@ def process(input_image, prompt, n_prompt, seed, total_second_length, latent_win
 
         if flag == 'file':
             output_filename = data
-            yield output_filename, gr.update(), gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True)
+            yield output_filename, gr.update(), gr.update(), gr.update(), gr.update(interactive=False), gr.update(interactive=True), gr.skip()
 
         if flag == 'progress':
             preview, desc, html = data
-            yield gr.update(), gr.update(visible=True, value=preview), desc, html, gr.update(interactive=False), gr.update(interactive=True)
+            yield gr.update(), gr.update(visible=True, value=preview), desc, html, gr.update(interactive=False), gr.update(interactive=True), gr.skip()
 
         if flag == 'end':
-            yield output_filename, gr.update(visible=False), gr.update(), '', gr.update(interactive=True), gr.update(interactive=False)
+            yield output_filename, gr.update(visible=False), gr.update(), '', gr.update(interactive=True), gr.update(interactive=False), gr.skip()
             break
 
 
@@ -397,7 +402,7 @@ with block:
     gr.HTML('<div style="text-align:center; margin-top:20px;">Share your results and find ideas at the <a href="https://x.com/search?q=framepack&f=live" target="_blank">FramePack Twitter (X) thread</a></div>')
 
     ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf]
-    start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button])
+    start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button, seed], show_progress_on=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button])
     end_button.click(fn=end_process)
 
 
