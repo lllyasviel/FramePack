@@ -20,6 +20,8 @@ FramePack can be trained with a much larger batch size, similar to the batch siz
 
 # News
 
+**2025 May 06:** The FramePack-F1 with Video Input - extend an existing video. Try by running "python demo_gradio_f1_video.py"
+
 **2025 May 03:** The FramePack-F1 is released. [Try it here.](https://github.com/lllyasviel/FramePack/discussions/459)
 
 Note that this GitHub repository is the only official FramePack website. We do not have any web services. All other websites are spam and fake, including but not limited to `framepack.co`, `frame_pack.co`, `framepack.net`, `frame_pack.net`, `framepack.ai`, `frame_pack.ai`, `framepack.pro`, `frame_pack.pro`, `framepack.cc`, `frame_pack.cc`,`framepackai.co`, `frame_pack_ai.co`, `framepackai.net`, `frame_pack_ai.net`, `framepackai.pro`, `frame_pack_ai.pro`, `framepackai.cc`, `frame_pack_ai.cc`, and so on. Again, they are all spam and fake. **Do not pay money or download files from any of those websites.**
@@ -66,6 +68,14 @@ We recommend having an independent Python 3.10.
 To start the GUI, run:
 
     python demo_gradio.py
+
+For F1 version (forward generation), run:
+
+    python demo_gradio_f1.py
+
+For version with video input (video extension), run:
+
+    python demo_gradio_f1_video.py
 
 Note that it supports `--share`, `--port`, `--server`, and so on.
 
