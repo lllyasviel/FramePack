@@ -8,7 +8,7 @@ Official implementation and desktop software for ["Packing Input Frame Context i
 
 Links: [**Paper**](https://arxiv.org/abs/2504.12626), [**Project Page**](https://lllyasviel.github.io/frame_pack_gitpage/)
 
-FramePack is a next-frame (next-frame-section) prediction neural network structure that generates videos progressively. 
+FramePack is a next-frame (next-frame-section) prediction neural network structure that generates videos progressively.
 
 FramePack compresses input contexts to a constant length so that the generation workload is invariant to video length.
 
@@ -69,13 +69,37 @@ To start the GUI, run:
 
 Note that it supports `--share`, `--port`, `--server`, and so on.
 
-The software supports PyTorch attention, xformers, flash-attn, sage-attention. By default, it will just use PyTorch attention. You can install those attention kernels if you know how. 
+The software supports PyTorch attention, xformers, flash-attn, sage-attention. By default, it will just use PyTorch attention. You can install those attention kernels if you know how.
 
 For example, to install sage-attention (linux):
 
     pip install sageattention==1.0.6
 
 However, you are highly recommended to first try without sage-attention since it will influence results, though the influence is minimal.
+
+**Docker**:
+
+NVIDIA Container Toolkit is needed to run cuda in the container
+
+https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
+
+* Build the image
+
+```
+docker build -t frame-pack --build-arg USER_ID=$(id -u) --build-arg GROUP_ID=$(id -g) .
+```
+
+* Run a container
+
+```
+docker run -p 7860:7860 --gpus all -v $(pwd):/app  --name frame-pack-container --rm frame-pack
+```
+
+Connect to the gradio demo with a web browser on http://localhost:7860
+
+If the following error occurs when run: `docker: Error response from daemon: could not select device driver "" with capabilities: [[gpu]].`
+
+NVIDIA Container Toolkit needs to be installed and the docker service restarted.
 
 # GUI
 
@@ -93,7 +117,7 @@ Note that the initial progress may be slower than later diffusion as the device 
 
 # Sanity Check
 
-Before trying your own inputs, we highly recommend going through the sanity check to find out if any hardware or software went wrong. 
+Before trying your own inputs, we highly recommend going through the sanity check to find out if any hardware or software went wrong.
 
 Next-frame-section prediction models are very sensitive to subtle differences in noise and hardware. Usually, people will get slightly different results on different devices, but the results should look overall similar. In some cases, if possible, you'll get exactly the same results.
 
@@ -117,9 +141,9 @@ The result will be:
 <table>
   <tr>
     <td align="center" width="300">
-      <video 
-        src="https://github.com/user-attachments/assets/bc74f039-2b14-4260-a30b-ceacf611a185" 
-        controls 
+      <video
+        src="https://github.com/user-attachments/assets/bc74f039-2b14-4260-a30b-ceacf611a185"
+        controls
         style="max-width:100%;">
       </video>
     </td>
@@ -160,9 +184,9 @@ You will get this:
 <table>
   <tr>
     <td align="center" width="300">
-      <video 
-        src="https://github.com/user-attachments/assets/04ab527b-6da1-4726-9210-a8853dda5577" 
-        controls 
+      <video
+        src="https://github.com/user-attachments/assets/04ab527b-6da1-4726-9210-a8853dda5577"
+        controls
         style="max-width:100%;">
       </video>
     </td>
@@ -183,9 +207,9 @@ About 30% users will get this (the other 70% will get other random results depen
 <table>
   <tr>
     <td align="center" width="300">
-      <video 
-        src="https://github.com/user-attachments/assets/149fb486-9ccc-4a48-b1f0-326253051e9b" 
-        controls 
+      <video
+        src="https://github.com/user-attachments/assets/149fb486-9ccc-4a48-b1f0-326253051e9b"
+        controls
         style="max-width:100%;">
       </video>
     </td>
@@ -222,9 +246,9 @@ If everything is in order you will get some result like this eventually.
 <table>
   <tr>
     <td align="center" width="300">
-      <video 
-        src="https://github.com/user-attachments/assets/c3be4bde-2e33-4fd4-b76d-289a036d3a47" 
-        controls 
+      <video
+        src="https://github.com/user-attachments/assets/c3be4bde-2e33-4fd4-b76d-289a036d3a47"
+        controls
         style="max-width:100%;">
       </video>
     </td>
@@ -241,9 +265,9 @@ If everything is in order you will get some result like this eventually.
 <table>
   <tr>
     <td align="center" width="300">
-      <video 
-        src="https://github.com/user-attachments/assets/37fe2c33-cb03-41e8-acca-920ab3e34861" 
-        controls 
+      <video
+        src="https://github.com/user-attachments/assets/37fe2c33-cb03-41e8-acca-920ab3e34861"
+        controls
         style="max-width:100%;">
       </video>
     </td>
@@ -272,9 +296,9 @@ Below are some more examples that you may be interested in reproducing.
 <table>
   <tr>
     <td align="center" width="300">
-      <video 
-        src="https://github.com/user-attachments/assets/cebe178a-09ce-4b7a-8f3c-060332f4dab1" 
-        controls 
+      <video
+        src="https://github.com/user-attachments/assets/cebe178a-09ce-4b7a-8f3c-060332f4dab1"
+        controls
         style="max-width:100%;">
       </video>
     </td>
@@ -297,9 +321,9 @@ Below are some more examples that you may be interested in reproducing.
 <table>
   <tr>
     <td align="center" width="300">
-      <video 
-        src="https://github.com/user-attachments/assets/116069d2-7499-4f38-ada7-8f85517d1fbb" 
-        controls 
+      <video
+        src="https://github.com/user-attachments/assets/116069d2-7499-4f38-ada7-8f85517d1fbb"
+        controls
         style="max-width:100%;">
       </video>
     </td>
@@ -322,9 +346,9 @@ Below are some more examples that you may be interested in reproducing.
 <table>
   <tr>
     <td align="center" width="300">
-      <video 
-        src="https://github.com/user-attachments/assets/d9e3534a-eb17-4af2-a8ed-8e692e9993d2" 
-        controls 
+      <video
+        src="https://github.com/user-attachments/assets/d9e3534a-eb17-4af2-a8ed-8e692e9993d2"
+        controls
         style="max-width:100%;">
       </video>
     </td>
@@ -347,9 +371,9 @@ Below are some more examples that you may be interested in reproducing.
 <table>
   <tr>
     <td align="center" width="300">
-      <video 
-        src="https://github.com/user-attachments/assets/e1b3279e-e30d-4d32-b55f-2fb1d37c81d2" 
-        controls 
+      <video
+        src="https://github.com/user-attachments/assets/e1b3279e-e30d-4d32-b55f-2fb1d37c81d2"
+        controls
         style="max-width:100%;">
       </video>
     </td>
@@ -372,9 +396,9 @@ Below are some more examples that you may be interested in reproducing.
 <table>
   <tr>
     <td align="center" width="300">
-      <video 
-        src="https://github.com/user-attachments/assets/aaa4481b-7bf8-4c64-bc32-909659767115" 
-        controls 
+      <video
+        src="https://github.com/user-attachments/assets/aaa4481b-7bf8-4c64-bc32-909659767115"
+        controls
         style="max-width:100%;">
       </video>
     </td>
@@ -398,9 +422,9 @@ Below are some more examples that you may be interested in reproducing.
 <table>
   <tr>
     <td align="center" width="300">
-      <video 
-        src="https://github.com/user-attachments/assets/f23f2f37-c9b8-45d5-a1be-7c87bd4b41cf" 
-        controls 
+      <video
+        src="https://github.com/user-attachments/assets/f23f2f37-c9b8-45d5-a1be-7c87bd4b41cf"
+        controls
         style="max-width:100%;">
       </video>
     </td>
@@ -423,9 +447,9 @@ Below are some more examples that you may be interested in reproducing.
 <table>
   <tr>
     <td align="center" width="300">
-      <video 
-        src="https://github.com/user-attachments/assets/62e9910e-aea6-4b2b-9333-2e727bccfc64" 
-        controls 
+      <video
+        src="https://github.com/user-attachments/assets/62e9910e-aea6-4b2b-9333-2e727bccfc64"
+        controls
         style="max-width:100%;">
       </video>
     </td>
@@ -441,7 +465,7 @@ Below are some more examples that you may be interested in reproducing.
 
 # Prompting Guideline
 
-Many people would ask how to write better prompts. 
+Many people would ask how to write better prompts.
 
 Below is a ChatGPT template that I personally often use to get prompts:
 
@@ -463,7 +487,7 @@ You paste the instruct to ChatGPT and then feed it an image to get prompt like t
 
 *The man dances powerfully, striking sharp poses and gliding smoothly across the reflective floor.*
 
-Usually this will give you a prompt that works well. 
+Usually this will give you a prompt that works well.
 
 You can also write prompts yourself. Concise prompts are usually preferred, for example:
 
