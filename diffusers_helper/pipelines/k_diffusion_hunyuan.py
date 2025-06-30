@@ -6,10 +6,12 @@ from diffusers_helper.k_diffusion.wrapper import fm_wrapper
 from diffusers_helper.utils import repeat_to_batch_size
 
 
+# from Flux series of flow matching models
+# get noise level at time t (logistic, mu controls inflection point -- high mu = inf. point further right, sigma controls sharpness of transition)
 def flux_time_shift(t, mu=1.15, sigma=1.0):
     return math.exp(mu) / (math.exp(mu) + (1 / t - 1) ** sigma)
 
-
+# get mu via linear interpolation, k = slope, b = y-intercept, mu = k * context_length + b
 def calculate_flux_mu(context_length, x1=256, y1=0.5, x2=4096, y2=1.15, exp_max=7.0):
     k = (y2 - y1) / (x2 - x1)
     b = y1 - k * x1
@@ -17,7 +19,7 @@ def calculate_flux_mu(context_length, x1=256, y1=0.5, x2=4096, y2=1.15, exp_max=
     mu = min(mu, math.log(exp_max))
     return mu
 
-
+# sample n steps, decaying from 1 to 0
 def get_flux_sigmas_from_mu(n, mu):
     sigmas = torch.linspace(1, 0, steps=n + 1)
     sigmas = flux_time_shift(sigmas, mu=mu)
@@ -31,9 +33,9 @@ def sample_hunyuan(
         initial_latent=None,
         concat_latent=None,
         strength=1.0,
-        width=512,
+        width=512, # in gradio demo, usually 640 x 640 ?
         height=512,
-        frames=16,
+        frames=16, # Gradio demo: 33 fps (latent_window_size=9 * 4 - 3) = 36 -3 = 33
         real_guidance_scale=1.0,
         distilled_guidance_scale=6.0,
         guidance_rescale=0.0,
@@ -44,14 +46,14 @@ def sample_hunyuan(
         prompt_embeds=None,
         prompt_embeds_mask=None,
         prompt_poolers=None,
-        negative_prompt_embeds=None,
+        negative_prompt_embeds=None, # negative prompts not used in gradio demos
         negative_prompt_embeds_mask=None,
         negative_prompt_poolers=None,
         dtype=torch.bfloat16,
         device=None,
         negative_kwargs=None,
         callback=None,
-        **kwargs,
+        **kwargs, # clean_latents, clean_latents_2x, etc. 
 ):
     device = device or transformer.device
 
@@ -59,26 +61,28 @@ def sample_hunyuan(
         batch_size = int(prompt_embeds.shape[0])
 
     latents = torch.randn((batch_size, 16, (frames + 3) // 4, height // 8, width // 8), generator=generator, device=generator.device).to(device=device, dtype=torch.float32)
+    # shape: B, 16, 33, 
+    B, C, T, H, W = latents.shape 
+    #print(f'Latent shape: {latents.shape}, dtype: {latents.dtype}, device: {latents.device}')
+    seq_length = T * H * W // 4  # for gradio demo: 640 x 640 x 33 --> 80 x 80 x 9 latent dims --> 14400 token seq length per second?
 
-    B, C, T, H, W = latents.shape
-    seq_length = T * H * W // 4
-
+    # Get noise schedule 
     if shift is None:
         mu = calculate_flux_mu(seq_length, exp_max=7.0)
     else:
         mu = math.log(shift)
 
-    sigmas = get_flux_sigmas_from_mu(num_inference_steps, mu).to(device)
+    sigmas = get_flux_sigmas_from_mu(num_inference_steps, mu).to(device) # noise schedule
 
-    k_model = fm_wrapper(transformer)
+    k_model = fm_wrapper(transformer) # why is it using k_diffusion w/ cfg in it if Hunyuan uses distilled cfg?
 
-    if initial_latent is not None:
+    if initial_latent is not None: # always None in gradio demos 
         sigmas = sigmas * strength
         first_sigma = sigmas[0].to(device=device, dtype=torch.float32)
         initial_latent = initial_latent.to(device=device, dtype=torch.float32)
-        latents = initial_latent.float() * (1.0 - first_sigma) + latents.float() * first_sigma
+        latents = initial_latent.float() * (1.0 - first_sigma) + latents.float() * first_sigma # apply initial noise 
 
-    if concat_latent is not None:
+    if concat_latent is not None: # always None in gradio demos
         concat_latent = concat_latent.to(latents)
 
     distilled_guidance = torch.tensor([distilled_guidance_scale * 1000.0] * batch_size).to(device=device, dtype=dtype)

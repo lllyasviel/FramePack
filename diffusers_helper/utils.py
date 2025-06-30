@@ -255,7 +255,7 @@ def soft_append_bcthw(history, current, overlap=0):
 
     assert history.shape[2] >= overlap, f"History length ({history.shape[2]}) must be >= overlap ({overlap})"
     assert current.shape[2] >= overlap, f"Current length ({current.shape[2]}) must be >= overlap ({overlap})"
-    
+    # Linear "crossfade" between history and current: w_k = 1 - (k/overlap - 1), blended_k = w_k Old_k + (1 - w_k) * new_k
     weights = torch.linspace(1, 0, overlap, dtype=history.dtype, device=history.device).view(1, 1, -1, 1, 1)
     blended = weights * history[:, :, -overlap:] + (1 - weights) * current[:, :, :overlap]
     output = torch.cat([history[:, :, :-overlap], blended, current[:, :, overlap:]], dim=2)
@@ -459,7 +459,7 @@ def repeat_to_batch_size(tensor: torch.Tensor, batch_size: int):
 
     repeat_times = batch_size // first_dim
 
-    return tensor.repeat(repeat_times, *[1] * (tensor.dim() - 1))
+    return tensor.repeat(repeat_times, *[1] * (tensor.dim() - 1)) # input = (d1, d2, d3,...,d_n) --> (repeat_times * d1, d2, d3, ..., d_n)
 
 
 def dim5(x):

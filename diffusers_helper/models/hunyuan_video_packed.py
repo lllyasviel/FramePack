@@ -78,7 +78,7 @@ def center_down_sample_3d(x, kernel_size):
     # return xc
     return torch.nn.functional.avg_pool3d(x, kernel_size, stride=kernel_size)
 
-
+# cumulative uniform sequence lengths for variable length attention (flashAttention 2)
 def get_cu_seqlens(text_mask, img_len):
     batch_size = text_mask.shape[0]
     text_len = text_mask.sum(dim=1)
@@ -372,7 +372,7 @@ class HunyuanVideoIndividualTokenRefiner(nn.Module):
 
         return hidden_states
 
-
+# text token refiner via bidirectional self attention -- see paper
 class HunyuanVideoTokenRefiner(nn.Module):
     def __init__(
         self,
@@ -530,7 +530,7 @@ class AdaLayerNormContinuous(nn.Module):
         x = self.norm(x) * (1 + scale) + shift
         return x
 
-
+# single stream 
 class HunyuanVideoSingleTransformerBlock(nn.Module):
     def __init__(
         self,
@@ -838,10 +838,10 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
 
     def process_input_hidden_states(
             self,
-            latents, latent_indices=None,
-            clean_latents=None, clean_latent_indices=None,
-            clean_latents_2x=None, clean_latent_2x_indices=None,
-            clean_latents_4x=None, clean_latent_4x_indices=None
+            latents, latent_indices=None, # hidden_states,   idxs in demo: latent_indices is [20, ..., 28 = 20 + latent_window_size - 1 = 20 + (9) - 1] 
+            clean_latents=None, clean_latent_indices=None, # in demo: concat of frame 0 & frame 19, indices [1,19]
+            clean_latents_2x=None, clean_latent_2x_indices=None, # in demo: latents of frames 17, 18, indices [17, 18]
+            clean_latents_4x=None, clean_latent_4x_indices=None # in demo: latents of frames 1-16, indices [1 to 16
     ):
         hidden_states = self.gradient_checkpointing_method(self.x_embedder.proj, latents)
         B, C, T, H, W = hidden_states.shape
@@ -854,7 +854,7 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
         rope_freqs = self.rope(frame_indices=latent_indices, height=H, width=W, device=hidden_states.device)
         rope_freqs = rope_freqs.flatten(2).transpose(1, 2)
 
-        if clean_latents is not None and clean_latent_indices is not None:
+        if clean_latents is not None and clean_latent_indices is not None: # apply RoPE to first and last frames 
             clean_latents = clean_latents.to(hidden_states)
             clean_latents = self.gradient_checkpointing_method(self.clean_x_embedder.proj, clean_latents)
             clean_latents = clean_latents.flatten(2).transpose(1, 2)
@@ -869,7 +869,7 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
             clean_latents_2x = clean_latents_2x.to(hidden_states)
             clean_latents_2x = pad_for_3d_conv(clean_latents_2x, (2, 4, 4))
             clean_latents_2x = self.gradient_checkpointing_method(self.clean_x_embedder.proj_2x, clean_latents_2x)
-            clean_latents_2x = clean_latents_2x.flatten(2).transpose(1, 2)
+            clean_latents_2x = clean_latents_2x.flatten(2).transpose(1, 2) # B C T H W -> B C (T*H*W) -> B (T * H * W) C
 
             clean_latent_2x_rope_freqs = self.rope(frame_indices=clean_latent_2x_indices, height=H, width=W, device=clean_latents_2x.device)
             clean_latent_2x_rope_freqs = pad_for_3d_conv(clean_latent_2x_rope_freqs, (2, 2, 2))
@@ -898,11 +898,11 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
     def forward(
             self,
             hidden_states, timestep, encoder_hidden_states, encoder_attention_mask, pooled_projections, guidance,
-            latent_indices=None,
-            clean_latents=None, clean_latent_indices=None,
-            clean_latents_2x=None, clean_latent_2x_indices=None,
-            clean_latents_4x=None, clean_latent_4x_indices=None,
-            image_embeddings=None,
+            latent_indices=None, # in demo: latent_indices is [20, ..., 28 = 20 + latent_window_size - 1 = 20 + (9) - 1] 
+            clean_latents=None, clean_latent_indices=None, # in demo: concat of frame 0 & frame 19, indices [1,19]
+            clean_latents_2x=None, clean_latent_2x_indices=None, # in demo: latents of frames 17, 18, indices [17, 18]
+            clean_latents_4x=None, clean_latent_4x_indices=None, # in demo: latents of frames 1-16, indices [1 to 16
+            image_embeddings=None, # in demo: from SigLip of input image
             attention_kwargs=None, return_dict=True
     ):
 
@@ -910,12 +910,13 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
             attention_kwargs = {}
 
         batch_size, num_channels, num_frames, height, width = hidden_states.shape
-        p, p_t = self.config['patch_size'], self.config['patch_size_t']
-        post_patch_num_frames = num_frames // p_t
-        post_patch_height = height // p
+        p, p_t = self.config['patch_size'], self.config['patch_size_t'] # 2, 1
+        post_patch_num_frames = num_frames // p_t # 33(?) // 1
+        post_patch_height = height // p 
         post_patch_width = width // p
         original_context_length = post_patch_num_frames * post_patch_height * post_patch_width
 
+        # apply RoPE and pad for 3d Conv
         hidden_states, rope_freqs = self.process_input_hidden_states(hidden_states, latent_indices, clean_latents, clean_latent_indices, clean_latents_2x, clean_latent_2x_indices, clean_latents_4x, clean_latent_4x_indices)
 
         temb = self.gradient_checkpointing_method(self.time_text_embed, timestep, guidance, pooled_projections)
@@ -940,7 +941,7 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
             img_seq_len = hidden_states.shape[1]
             txt_seq_len = encoder_hidden_states.shape[1]
 
-            cu_seqlens_q = get_cu_seqlens(encoder_attention_mask, img_seq_len)
+            cu_seqlens_q = get_cu_seqlens(encoder_attention_mask, img_seq_len) # get cumulative uniform sequence lengths for FlashAttention2 on Text-Video cross attention
             cu_seqlens_kv = cu_seqlens_q
             max_seqlen_q = img_seq_len + txt_seq_len
             max_seqlen_kv = max_seqlen_q

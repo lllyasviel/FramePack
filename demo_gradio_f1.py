@@ -270,10 +270,10 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 history_pixels = vae_decode(real_history_latents, vae).cpu()
             else:
                 section_latent_frames = latent_window_size * 2
-                overlapped_frames = latent_window_size * 4 - 3
+                overlapped_frames = latent_window_size * 4 - 3 # 9 * 4 - 3 = 33 by default
 
                 current_pixels = vae_decode(real_history_latents[:, :, -section_latent_frames:], vae).cpu()
-                history_pixels = soft_append_bcthw(history_pixels, current_pixels, overlapped_frames)
+                history_pixels = soft_append_bcthw(history_pixels, current_pixels, overlap=0)
 
             if not high_vram:
                 unload_complete_models()
@@ -358,7 +358,7 @@ with block:
                 seed = gr.Number(label="Seed", value=31337, precision=0)
 
                 total_second_length = gr.Slider(label="Total Video Length (Seconds)", minimum=1, maximum=120, value=5, step=0.1)
-                latent_window_size = gr.Slider(label="Latent Window Size", minimum=1, maximum=33, value=9, step=1, visible=False)  # Should not change
+                latent_window_size = gr.Slider(label="Latent Window Size", minimum=1, maximum=33, value=9, step=1, visible=False)  # Should not change = 9 by default
                 steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=25, step=1, info='Changing this value is not recommended.')
 
                 cfg = gr.Slider(label="CFG Scale", minimum=1.0, maximum=32.0, value=1.0, step=0.01, visible=False)  # Should not change

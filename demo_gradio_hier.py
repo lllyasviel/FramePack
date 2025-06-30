@@ -204,6 +204,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             print(f'latent_padding_size = {latent_padding_size}, is_last_section = {is_last_section}')
 
             indices = torch.arange(0, sum([1, latent_padding_size, latent_window_size, 1, 2, 16])).unsqueeze(0)
+            # 1,  3 * 9, then 2 * 9, 1*9, 0 * 9, 9, 1, 2, 16
             clean_latent_indices_pre, blank_indices, latent_indices, clean_latent_indices_post, clean_latent_2x_indices, clean_latent_4x_indices = indices.split([1, latent_padding_size, latent_window_size, 1, 2, 16], dim=1)
             clean_latent_indices = torch.cat([clean_latent_indices_pre, clean_latent_indices_post], dim=1)
 
