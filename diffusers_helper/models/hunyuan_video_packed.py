@@ -1,9 +1,17 @@
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import math
+import os
+from datetime import datetime
 import torch
 import einops
 import torch.nn as nn
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
+
 
 from diffusers.loaders import FromOriginalModelMixin
 from diffusers.configuration_utils import ConfigMixin, register_to_config
@@ -214,6 +222,72 @@ class HunyuanAttnProcessorFlashAttnSingle:
         hidden_states, encoder_hidden_states = hidden_states[:, :-txt_length], hidden_states[:, -txt_length:]
 
         return hidden_states, encoder_hidden_states
+
+class SaveFlashAttentionProcessor(HunyuanAttnProcessorFlashAttnSingle):
+    def __init__(self, rand_vis=False, fixed_vis=False, **kwargs):
+        super().__init__(**kwargs)
+        self.attn_maps = []  # Will store (batch, heads, seq, seq) tensors
+        self.rand_vis = rand_vis
+        self.fixed_vis = fixed_vis
+
+    def __call__(self, attn, hidden_states, encoder_hidden_states, attention_mask, image_rotary_emb):
+        # 1. Concatenate and project as usual
+        hs = torch.cat([hidden_states, encoder_hidden_states], dim=1)
+        q = attn.norm_q(attn.to_q(hs).unflatten(2, (attn.heads, -1)))
+        k = attn.norm_k(attn.to_k(hs).unflatten(2, (attn.heads, -1)))
+        v =             attn.to_v(hs).unflatten(2, (attn.heads, -1))
+        # 2. Apply rotary embeddings (as in your original)
+        txt_len = encoder_hidden_states.shape[1]
+        q = torch.cat([apply_rotary_emb_transposed(q[:, :-txt_len], image_rotary_emb), q[:, -txt_len:]], dim=1)
+        k = torch.cat([apply_rotary_emb_transposed(k[:, :-txt_len], image_rotary_emb), k[:, -txt_len:]], dim=1)
+        # 3. Manually compute scaled dot-prod scores & probs
+    
+        B, S, H, D = q.shape
+        partition_count = 4
+        sample_count = m = max(1, S // partition_count)
+        if self.fixed_vis:
+            for i in range(partition_count):            # which “row‐block” of the map
+                q_start = i * m
+                q_end   = min((i+1) * m, S)
+                for j in range(partition_count):        # which “col‐block” of the map
+                    k_start = j * m
+                    k_end   = min((j+1) * m, S)
+
+                    # slice out exactly that (m_i × m_j) block
+                    q_idx = torch.arange(q_start, q_end, device=q.device)
+                    k_idx = torch.arange(k_start, k_end, device=q.device)
+
+                    q_sub = q[:, q_idx, :, :]    # (B, m_i, H, D)
+                    k_sub = k[:, k_idx, :, :]    # (B, m_j, H, D)
+
+                    scale = 1.0 / math.sqrt(D)
+                    with torch.no_grad():
+                        # yields (B, H, m_i, m_j)
+                        attn_scores_sub = torch.einsum(
+                            "b i h d, b j h d -> b h i j",
+                            q_sub * scale,
+                            k_sub
+                        )
+                        attn_probs_sub = torch.softmax(attn_scores_sub, dim=-1)
+                        self.attn_maps.append(attn_probs_sub.detach().cpu())
+                        print(f"saved row {i}, col {j}, ({q_start}, {k_start}) attn map")
+        elif self.rand_vis:
+            idx = torch.randperm(S, device=q.device)[:sample_count]
+            idx, _ = torch.sort(idx)  
+            q_sub = q[:, idx, :, :]    # (B, sample_count, H, D)
+            k_sub = k[:, idx, :, :]    # (B, sample_count, H, D)
+        # idx = torch.randperm(S, device=q.device)[:sample_count]
+
+        # self.attn_maps.append((idx.cpu(), attn_probs_sub.detach().cpu()))
+        # print(f"attn_maps appended submap with {sample_count}x{sample_count} entries; total maps: {len(self.attn_maps)}")
+        cu_q, cu_kv, max_q, max_kv = attention_mask
+        out = attn_varlen_func(q, k, v, cu_q, cu_kv, max_q, max_kv)
+        # print('flash attn computed')
+        out = out.flatten(-2)
+
+        img, txt = out[:, :-txt_len], out[:, -txt_len:]
+        return img, txt
+
 
 
 class CombinedTimestepGuidanceTextProjEmbeddings(nn.Module):
@@ -551,7 +625,8 @@ class HunyuanVideoSingleTransformerBlock(nn.Module):
             heads=num_attention_heads,
             out_dim=hidden_size,
             bias=True,
-            processor=HunyuanAttnProcessorFlashAttnSingle(),
+            #processor=HunyuanAttnProcessorFlashAttnSingle(),
+            processor=SaveFlashAttentionProcessor(fixed_vis=True),
             qk_norm=qk_norm,
             eps=1e-6,
             pre_only=True,
@@ -561,6 +636,135 @@ class HunyuanVideoSingleTransformerBlock(nn.Module):
         self.proj_mlp = nn.Linear(hidden_size, mlp_dim)
         self.act_mlp = nn.GELU(approximate="tanh")
         self.proj_out = nn.Linear(hidden_size + mlp_dim, hidden_size)
+        self._capture_maps = True
+
+    def reconstruct_full_attention(self, submaps: torch.Tensor, grid_size=(4,4)) -> torch.Tensor:
+        """
+        attn_map: (B, H, m, m) where B == grid_size[0]*grid_size[1]
+        Returns: full_maps of shape (H, grid_size[0]*m, grid_size[1]*m)
+        """
+        print(f"  attn_map in reconstruct full att -> type: {type(submaps)}")
+        print('submaps shape: ', submaps.shape)
+        if len(submaps.shape) == 4:
+            B, H, m, m2 = submaps.shape
+        else: 
+            H, m, m2 = submaps.shape
+        
+        rows, cols = grid_size
+        f"Expected {rows*cols} blocks, got {B}"
+        assert m == m2, "Blocks must be square"
+
+        # allocate the full map
+        full_S = m * rows
+        full_maps = torch.zeros((H, full_S, full_S), device=submaps.device, dtype=submaps.dtype)
+
+        for block_idx in range(B):
+            r = block_idx // cols
+            c = block_idx %  cols
+            # slice out where this block goes
+            row_start = r * m
+            col_start = c * m
+            full_maps[:, 
+                    row_start:row_start + m, 
+                    col_start:col_start + m] = submaps[block_idx]
+        return full_maps
+
+    def save_attention_maps(self, map_entry, out_prefix="attn", timestamp=None, batch_idx=0, layer_idx=0, pass_num=-1):
+        """
+        attn_map: torch.Tensor of shape (num_heads, seq_len, seq_len)
+        out_prefix: filename prefix
+        """
+        if timestamp is not None:
+            root_run_dir = f"attention_run_{timestamp}"
+            os.makedirs(root_run_dir, exist_ok=True)
+        # if isinstance(map_entry, tuple) and len(map_entry) == 2:
+        #     for i, comp in enumerate(map_entry):
+        #         print(f"  entry[{i}] -> type: {type(comp)}")
+        #         # if it's a tensor, show its shape and dtype
+        #         if isinstance(comp, torch.Tensor):
+        #             print(f"    tensor shape: {tuple(comp.shape)}, dtype: {comp.dtype}")
+        #         else:
+        #             # for non‐tensors, show its repr or other attrs
+        #             print(f"    repr: {repr(comp)}")
+        #     if not (isinstance(map_entry, tuple) and len(map_entry) == 2):
+        #         raise ValueError(f"save_attention_maps expected a 2-tuple, got {map_entry!r}")
+        #     idx, submaps = map_entry    
+        #     print(f"  submaps -> type: {type(submaps)}")
+        full_attn = torch.cat(map_entry, dim=0)
+        full_maps = self.reconstruct_full_attention(full_attn)  # (H, 4m, 4m)
+        # else:
+        #     idx = None
+        #     attn_map = map_entry
+        subfolder = out_prefix if pass_num < 0 else f"{out_prefix}_pass{pass_num}"
+        if timestamp is not None:
+            run_dir = os.path.join(root_run_dir, subfolder)
+        else: 
+            run_dir = subfolder
+        os.makedirs(run_dir, exist_ok=True)
+
+        # 2) attn_map should now be (B=1, H, m, m)
+        if full_maps.dim() == 3:
+            full_maps = full_maps.unsqueeze(0)
+        B, H, m, _ = full_maps.shape
+        print (f"save_attention_maps: B={B}, H={H}, m={m}, pass_num={pass_num}")
+        if B == 1:
+            full_maps = full_maps[0]  # now (H, m, m)
+
+        # 3) layout grid
+        cols = int(math.ceil(math.sqrt(H)))
+        rows = int(math.ceil(H / cols))
+
+        fig, axes = plt.subplots(rows, cols, figsize=(cols*3, rows*3))
+        axes = axes.flatten()
+
+        # 4) plot each head
+        for h in range(H):
+            ax = axes[h]
+            data = full_maps[h].detach().cpu().to(torch.float32).numpy()
+            print(f"full Head {h}: min={data.min():.4e}, max={data.max():.4e}, mean={data.mean():.4e}")
+            # cmap = plt.cm.viridis
+            # cmap.set_under("white")
+            # im = ax.imshow(data, vmin=1e-6, vmax=data.max(),          aspect="auto", cmap=cmap)
+            # # im = ax.imshow(data, aspect="auto")
+            # eps = min(1e-16, data.min())
+            # data_for_plot = data.copy()
+            # data_for_plot[data_for_plot < eps] = eps
+            eps = 1e-20
+            data_for_plot = data.copy()
+            data_for_plot[data_for_plot < eps] = eps
+
+            im = ax.imshow(
+                data_for_plot,
+                norm=LogNorm(vmin=eps, vmax=data.max()),
+                aspect="auto",
+                cmap="magma",     # or viridis, plasma, etc.
+            )
+            
+            title = f"Head {h}"
+            if pass_num >= 0:
+                title += f" (pass {pass_num})"  
+            # if idx is not None:
+            #     title += f" (tokens {idx.tolist()[:5]})"  # show first few
+            ax.set_title(title)
+            ax.set_xticks([]); ax.set_yticks([])
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        
+        
+
+       # 5) turn off any extra axes
+        for j in range(H, len(axes)):
+            axes[j].axis("off")
+
+        plt.tight_layout()
+
+        # 6) save into the run directory
+        fname = f"{out_prefix}_layer{layer_idx:02d}_pass{pass_num:02d}.png"
+        out_path = os.path.join(run_dir, fname)
+        fig.savefig(out_path, dpi=150)
+        plt.close(fig)
+        print(f"Saved attention maps to {out_path}")
+    def enable_capture(self):
+        self._capture_maps = True
 
     def forward(
         self,
@@ -592,6 +796,29 @@ class HunyuanVideoSingleTransformerBlock(nn.Module):
             image_rotary_emb=image_rotary_emb,
         )
         attn_output = torch.cat([attn_output, context_attn_output], dim=1)
+        # if self._capture_maps:
+        #     print('starting attention map capture...')
+        #     maps = self.attn.processor.attn_maps
+
+        #     for layer_idx, entry in enumerate(maps):
+        #         self.save_attention_maps(entry,
+        #             out_prefix="my_attention",
+        #             batch_idx=0,
+        #             layer_idx=layer_idx)
+        #     # only now do the slow plotting
+        #     # first_map = self.attn.processor.attn_maps[0][0]
+        #     # self.save_attention_maps(first_map)
+        #     # print(f"Captured {len(maps)} attention calls.")
+        #     self._capture_maps = False 
+        #     print("attention map capturing turned off")
+        
+        
+        # # Look at the first call:
+        # first = maps[0]    # shape: (B, H, S, S)
+        # B, H, S, _ = first.shape
+
+        # first_map = maps[0][0]  # layer 0, batch 0 → shape (H,S,S)
+        # self.save_attention_maps(first_map)
 
         # 3. Modulation and residual connection
         hidden_states = torch.cat([attn_output, mlp_hidden_states], dim=2)
@@ -603,6 +830,10 @@ class HunyuanVideoSingleTransformerBlock(nn.Module):
             hidden_states[:, -text_seq_length:, :],
         )
         return hidden_states, encoder_hidden_states
+    
+    
+
+
 
 
 class HunyuanVideoTransformerBlock(nn.Module):
@@ -747,11 +978,13 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
         has_image_proj=False,
         image_proj_dim=1152,
         has_clean_x_embedder=False,
+        timestamp = None,
     ) -> None:
         super().__init__()
-
+        self.pass_number = 0
         inner_dim = num_attention_heads * attention_head_dim
         out_channels = out_channels or in_channels
+        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         # 1. Latent and condition embedders
         self.x_embedder = HunyuanVideoPatchEmbed((patch_size_t, patch_size, patch_size), in_channels, inner_dim)
@@ -1029,8 +1262,46 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
         hidden_states = einops.rearrange(hidden_states, 'b (t h w) (c pt ph pw) -> b c (t pt) (h ph) (w pw)',
                                          t=post_patch_num_frames, h=post_patch_height, w=post_patch_width,
                                          pt=p_t, ph=p, pw=p)
+        # for block_id, block in enumerate(self.single_transformer_blocks):
+        #     proc = block.attn.processor
+        
+        for layer_idx, block in enumerate(self.single_transformer_blocks):
+            print(f">>> Layer {layer_idx} proc.attn_maps contents:")
+            
+            proc = block.attn.processor
+            for i, item in enumerate(proc.attn_maps):
+                print(f"   [{i}]:", type(item), 
+                    "len=" if hasattr(item, "__len__") else "", 
+                    getattr(item, "__len__", lambda: "")(), 
+                    "; first component type:", 
+                    type(item[0]) if isinstance(item, (tuple,list)) else None, 
+                    "; second component type:", 
+                    type(item[1]) if isinstance(item, (tuple,list)) and len(item)>1 else None
+                )
+            
+            block.save_attention_maps(
+                proc.attn_maps,
+                timestamp=self.timestamp,
+                out_prefix="attention",
+                pass_num = self.pass_number,
+                layer_idx=layer_idx,
+            )
+
+            # for map_idx, map_entry in enumerate(proc.attn_maps):
+            #     # batch_idx is usually 0 unless you run multiple images
+            #     batch_idx = 0
+            #     # call your existing saver
+            #     block.save_attention_maps(
+            #         map_entry,
+            #         timestamp=self.timestamp,
+            #         out_prefix="attention",
+            #         pass_num = self.pass_number,
+            #         batch_idx=batch_idx,
+            #         layer_idx=layer_idx,
+            #     )
 
         if return_dict:
             return Transformer2DModelOutput(sample=hidden_states)
-
+        print('finished one forward pass, pass number:', self.pass_number)
+        self.pass_number += 1
         return hidden_states,

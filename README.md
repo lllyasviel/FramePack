@@ -2,7 +2,34 @@
     <img src="https://github.com/user-attachments/assets/2cc030b4-87e1-40a0-b5bf-1b7d6b62820b" width="300">
 </p>
 
-# FramePack
+# File Guide
+**demo_gradio_...py **
+This is the main interface for sampling (& experiments so far), see FramePack README for guide on usage and set up. 
+  _gradio.py is the standard mode, it uses the inverted anti-drifting format. 
+  f1 is the new forward anti-drifting mode, supposedly faster but I find it has bugs and errors often.
+  hier is the old Hierarchical Sampling I proposed but turned away from. 
+
+  **To Do**: Add offline sampling -- no need for UI & Gradio App, speeds up experiments
+
+**/models/hunyuan_video_packed.py**
+This contains the core code of the model itself, including the Transformers, transformer blocks, RoPE, and FramePack-unique index based compression code. 
+**This is where the visualization code lives**
+
+**/k_diffusion**
+Contains code for Lvmin Zhang's version of [UniPC sampling](https://arxiv.org/abs/2302.04867), a varient of Flow Matching, through the lense of K-Diffusion? K-Diffusion by [Katherine Crowson](https://github.com/crowsonkb/k-diffusion?tab=readme-ov-file), is an implementation of this Karras et Al [**Paper**](https://arxiv.org/abs/2206.00364).
+
+
+**/pipelines/k_diffusion_hunyuan.py**
+Contains the Sample function which wraps around the sample_uni_pc function in k_diffusion. 
+
+
+
+
+
+
+# Fork of FramePack
+
+### Beginning of FramePack README
 
 Official implementation and desktop software for ["Packing Input Frame Context in Next-Frame Prediction Models for Video Generation"](https://lllyasviel.github.io/frame_pack_gitpage/).
 
