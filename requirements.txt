@@ -1,3 +1,12 @@
+# PyTorch CUDA Index - must be first line
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# PyTorch with CUDA support
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
+
+# Dependencies
 accelerate==1.6.0
 diffusers==0.33.1
 transformers==4.46.2
@@ -13,3 +22,13 @@ torchsde==0.2.6
 einops
 opencv-contrib-python
 safetensors
+
+# Video encoding support
+ffmpeg-python>=0.2.0
+imageio[ffmpeg]>=2.0.0
+moviepy>=1.0.3
+
+
+# Better Hugging Face performance
+hf-transfer  # Faster model downloads via Rust backend
+# huggingface_hub[hf_xet]  # Alternative: hf_xet for better download performance
