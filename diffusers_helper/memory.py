@@ -1,5 +1,12 @@
 # By lllyasviel
-
+import os
+from xfuser.core.distributed import (
+    get_sequence_parallel_rank,
+    get_sequence_parallel_world_size,
+    get_sp_group,
+    init_distributed_environment,
+    initialize_model_parallel,
+)
 
 import torch
 
@@ -8,6 +15,25 @@ cpu = torch.device('cpu')
 gpu = torch.device(f'cuda:{torch.cuda.current_device()}')
 gpu_complete_modules = []
 
+def _init_distributed(args):
+    """Initialize distributed environment"""
+    rank = int(os.environ.get("RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    assert world_size == args.ring_degree * args.ulysses_degree, \
+        f"World size {world_size} must equal ring_degree {args.ring_degree} * ulysses_degree {args.ulysses_degree}"
+    init_distributed_environment(rank=rank, world_size=world_size)
+    initialize_model_parallel(
+        sequence_parallel_degree=world_size,
+        ring_degree=args.ring_degree,
+        ulysses_degree=args.ulysses_degree,
+    )
+    # Get local rank from environment variable
+    rank = get_sequence_parallel_rank()
+    world_size = get_sequence_parallel_world_size()
+    device = torch.device(f"cuda:{rank}")
+
+    print(f"Initialized distributed environment - rank {rank} of {world_size} on device {device}")
+    return rank, world_size, device
 
 class DynamicSwapInstaller:
     @staticmethod
@@ -70,7 +96,8 @@ def fake_diffusers_current_device(model: torch.nn.Module, target_device: torch.d
 
 def get_cuda_free_memory_gb(device=None):
     if device is None:
-        device = gpu
+        rank = int(os.environ.get("LOCAL_RANK", 0))
+        device = torch.device(f'cuda:{rank}')
 
     memory_stats = torch.cuda.memory_stats(device)
     bytes_active = memory_stats['active_bytes.all.current']

@@ -113,7 +113,8 @@ def sample_hunyuan(
     )
 
     if sampler == 'unipc':
-        results = sample_unipc(k_model, latents, sigmas, extra_args=sampler_kwargs, disable=False, callback=callback)
+        with torch.cuda.device(device):
+            results = sample_unipc(k_model, latents, sigmas, extra_args=sampler_kwargs, disable=False, callback=callback)
     else:
         raise NotImplementedError(f'Sampler {sampler} is not supported.')
 

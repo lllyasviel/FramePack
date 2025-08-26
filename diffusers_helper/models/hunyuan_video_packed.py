@@ -17,6 +17,21 @@ from diffusers.models.modeling_utils import ModelMixin
 from diffusers_helper.dit_common import LayerNorm
 from diffusers_helper.utils import zero_module
 
+try:
+    import flash_attn
+    from flash_attn.flash_attn_interface import _flash_attn_forward
+    from flash_attn.flash_attn_interface import flash_attn_varlen_func
+except ImportError:
+    flash_attn = None
+    flash_attn_varlen_func = None
+    _flash_attn_forward = None
+import xfuser
+from xfuser.core.distributed import (
+    get_sequence_parallel_world_size,
+    get_sequence_parallel_rank,
+    get_sp_group
+)
+
 
 enabled_backends = []
 
@@ -140,6 +155,70 @@ def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seq
     return x
 
 
+class HunyuanAttnProcessorXDiTParallelDouble:
+    def __init__(self):
+        from xfuser.core.long_ctx_attention import xFuserLongContextAttention
+        self.hybrid_seq_parallel_attn = xFuserLongContextAttention()
+
+
+    def __call__(self, attn, hidden_states, encoder_hidden_states, attention_mask, image_rotary_emb):
+        if attn.fused_projections:
+            query, key, value = torch.chunk(attn.to_qkv(hidden_states), chunks=3, dim=-1)
+        else:
+            query = attn.to_q(hidden_states)
+            key = attn.to_k(hidden_states)
+            value = attn.to_v(hidden_states)
+        query = query.unflatten(2, (attn.heads, -1))
+        key = key.unflatten(2, (attn.heads, -1))
+        value = value.unflatten(2, (attn.heads, -1))
+
+        query = attn.norm_q(query)
+        key = attn.norm_k(key)
+
+        query = apply_rotary_emb_transposed(query, image_rotary_emb)
+        key = apply_rotary_emb_transposed(key, image_rotary_emb)
+
+        if attn.fused_projections:
+            encoder_query, encoder_key, encoder_value = torch.chunk(attn.to_added_qkv(encoder_hidden_states), chunks=3, dim=-1)
+        else:
+            encoder_query = attn.add_q_proj(encoder_hidden_states)
+            encoder_key = attn.add_k_proj(encoder_hidden_states)
+            encoder_value = attn.add_v_proj(encoder_hidden_states)
+
+        encoder_query = encoder_query.unflatten(2, (attn.heads, -1))
+        encoder_key = encoder_key.unflatten(2, (attn.heads, -1))
+        encoder_value = encoder_value.unflatten(2, (attn.heads, -1))
+
+        encoder_query = attn.norm_added_q(encoder_query)
+        encoder_key = attn.norm_added_k(encoder_key)
+        query = torch.cat([query, encoder_query], dim=1)
+        key = torch.cat([key, encoder_key], dim=1)
+        value = torch.cat([value, encoder_value], dim=1)
+
+        txt_length = encoder_hidden_states.shape[1]
+        img_len = hidden_states.shape[1]
+        hidden_states = self.hybrid_seq_parallel_attn(
+            None,
+            query[:, :img_len],
+            key[:, :img_len],
+            value[:, :img_len],
+            dropout_p=0.0,
+            causal=False,
+            joint_tensor_query=query[:, img_len:],
+            joint_tensor_key=key[:, img_len:],
+            joint_tensor_value=value[:, img_len:],
+            joint_strategy="rear",
+        )
+        hidden_states = hidden_states.flatten(2, 3)
+
+        hidden_states, encoder_hidden_states = hidden_states[:, :-txt_length], hidden_states[:, -txt_length:]
+
+        hidden_states = attn.to_out[0](hidden_states)
+        hidden_states = attn.to_out[1](hidden_states)
+        encoder_hidden_states = attn.to_add_out(encoder_hidden_states)
+
+        return hidden_states, encoder_hidden_states
+
 class HunyuanAttnProcessorFlashAttnDouble:
     def __call__(self, attn, hidden_states, encoder_hidden_states, attention_mask, image_rotary_emb):
         cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv = attention_mask
@@ -185,6 +264,52 @@ class HunyuanAttnProcessorFlashAttnDouble:
 
         return hidden_states, encoder_hidden_states
 
+
+class HunyuanAttnProcessorXDiTParallelSingle:
+    def __init__(self):
+        from xfuser.core.long_ctx_attention import xFuserLongContextAttention
+        self.hybrid_seq_parallel_attn = xFuserLongContextAttention()
+
+    def __call__(self, attn, hidden_states, encoder_hidden_states, attention_mask, image_rotary_emb):
+        hidden_states = torch.cat([hidden_states, encoder_hidden_states], dim=1)
+
+        if attn.fused_projections:
+            query, key, value = torch.chunk(attn.to_qkv(hidden_states), chunks=3, dim=-1)
+        else:
+            query = attn.to_q(hidden_states)
+            key = attn.to_k(hidden_states)
+            value = attn.to_v(hidden_states)
+
+        query = query.unflatten(2, (attn.heads, -1))
+        key = key.unflatten(2, (attn.heads, -1))
+        value = value.unflatten(2, (attn.heads, -1))
+
+        query = attn.norm_q(query)
+        key = attn.norm_k(key)
+
+        txt_length = encoder_hidden_states.shape[1]
+
+        query = torch.cat([apply_rotary_emb_transposed(query[:, :-txt_length], image_rotary_emb), query[:, -txt_length:]], dim=1)
+        key = torch.cat([apply_rotary_emb_transposed(key[:, :-txt_length], image_rotary_emb), key[:, -txt_length:]], dim=1)
+        img_len = hidden_states.shape[1]
+
+        hidden_states = self.hybrid_seq_parallel_attn(
+            None,
+            query[:, :img_len],
+            key[:, :img_len],
+            value[:, :img_len],
+            dropout_p=0.0,
+            causal=False,
+            joint_tensor_query=query[:, img_len:],
+            joint_tensor_key=key[:, img_len:],
+            joint_tensor_value=value[:, img_len:],
+            joint_strategy="rear",
+        )
+        hidden_states = hidden_states.flatten(2, 3)
+
+        hidden_states, encoder_hidden_states = hidden_states[:, :-txt_length], hidden_states[:, -txt_length:]
+
+        return hidden_states, encoder_hidden_states   
 
 class HunyuanAttnProcessorFlashAttnSingle:
     def __call__(self, attn, hidden_states, encoder_hidden_states, attention_mask, image_rotary_emb):
@@ -551,7 +676,8 @@ class HunyuanVideoSingleTransformerBlock(nn.Module):
             heads=num_attention_heads,
             out_dim=hidden_size,
             bias=True,
-            processor=HunyuanAttnProcessorFlashAttnSingle(),
+            processor=HunyuanAttnProcessorXDiTParallelSingle(),
+            # processor=HunyuanAttnProcessorFlashAttnSingle(),
             qk_norm=qk_norm,
             eps=1e-6,
             pre_only=True,
@@ -561,6 +687,9 @@ class HunyuanVideoSingleTransformerBlock(nn.Module):
         self.proj_mlp = nn.Linear(hidden_size, mlp_dim)
         self.act_mlp = nn.GELU(approximate="tanh")
         self.proj_out = nn.Linear(hidden_size + mlp_dim, hidden_size)
+
+    def fuse_projections(self):
+        self.attn.fuse_projections()
 
     def forward(
         self,
@@ -629,7 +758,8 @@ class HunyuanVideoTransformerBlock(nn.Module):
             out_dim=hidden_size,
             context_pre_only=False,
             bias=True,
-            processor=HunyuanAttnProcessorFlashAttnDouble(),
+            # processor=HunyuanAttnProcessorFlashAttnDouble(),
+            processor=HunyuanAttnProcessorXDiTParallelDouble(),
             qk_norm=qk_norm,
             eps=1e-6,
         )
@@ -639,6 +769,9 @@ class HunyuanVideoTransformerBlock(nn.Module):
 
         self.norm2_context = LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.ff_context = FeedForward(hidden_size, mult=mlp_ratio, activation_fn="gelu-approximate")
+
+    def fuse_projections(self):
+        self.attn.fuse_projections()
 
     def forward(
         self,
@@ -785,6 +918,11 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
                 for _ in range(num_single_layers)
             ]
         )
+        
+        self.sp_world_size =get_sequence_parallel_world_size()
+        self.sp_rank = get_sequence_parallel_rank()
+        self.sp_group = get_sp_group()
+        self.split_dim = None
 
         # 5. Output projection
         self.norm_out = AdaLayerNormContinuous(inner_dim, inner_dim, elementwise_affine=False, eps=1e-6)
@@ -895,6 +1033,63 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
 
         return hidden_states, rope_freqs
 
+    def sequence_parallel_split(self, hidden_states, rope_freqs):
+        """
+        Handle sequence parallel splitting, attention replacement, and aggregation logic.
+        
+        This method splits the input tensors across multiple GPUs for sequence parallel processing,
+        ensuring proper padding and chunking for distributed computation.
+        
+        Args:
+            hidden_states (torch.Tensor): Input hidden states tensor with shape [batch, seq_len, hidden_dim]
+            rope_freqs (torch.Tensor): Rotary position encoding frequencies with shape [batch, seq_len, dim]
+            
+        Returns:
+            tuple: A tuple containing:
+                - hidden_states (torch.Tensor): Chunked hidden states for current rank
+                - rope_freqs (torch.Tensor): Chunked rope frequencies for current rank
+        """
+        seq_len = hidden_states.shape[1]
+        
+        # Calculate padding size to ensure sequence length is multiple of 8
+        self.pad_size = (8 - (seq_len % 8)) % 8
+        
+        if self.pad_size > 0:
+            # Pad hidden_states with zeros in sequence dimension
+            pad_shape = list(hidden_states.shape)
+            pad_shape[1] = self.pad_size
+            padding = torch.zeros(pad_shape, dtype=hidden_states.dtype, device=hidden_states.device)
+            hidden_states = torch.cat([hidden_states, padding], dim=1)
+            seq_len = hidden_states.size(1)
+
+            # Pad rope_freqs with zeros in sequence dimension
+            pad_shape = list(rope_freqs.shape)
+            pad_shape[1] = self.pad_size
+            padding = torch.zeros(pad_shape, dtype=rope_freqs.dtype, device=rope_freqs.device)
+            rope_freqs = torch.cat([rope_freqs, padding], dim=1)
+        
+        # Verify sequence length is divisible by sequence parallel world size
+        if seq_len % self.sp_world_size == 0:
+            self.split_dim = 1  # Split along sequence dimension
+        else:
+            assert False, f"seq_len: {seq_len}, self.sp_world_size: {self.sp_world_size}"
+
+        # Split hidden_states into chunks for distributed processing
+        chunks = torch.chunk(hidden_states, self.sp_world_size, dim=self.split_dim)
+        hidden_states = chunks[self.sp_rank]
+        
+        # Split rope_freqs into chunks for distributed processing
+        rope_chunks = torch.chunk(rope_freqs, self.sp_world_size, dim=self.split_dim)
+        rope_freqs = rope_chunks[self.sp_rank]
+            
+        return hidden_states, rope_freqs
+
+    def sequence_parallel_allgather(self, hidden_states):
+        hidden_states = self.sp_group.all_gather(hidden_states, dim=self.split_dim)
+        if self.pad_size > 0:
+            hidden_states = hidden_states[:, :-self.pad_size]
+        return hidden_states
+
     def forward(
             self,
             hidden_states, timestep, encoder_hidden_states, encoder_attention_mask, pooled_projections, guidance,
@@ -937,6 +1132,9 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
             encoder_hidden_states = encoder_hidden_states[:, :text_len]
             attention_mask = None, None, None, None
         else:
+            # Check if sequence parallel is requested but not implemented
+            if self.sp_world_size > 1:
+                raise NotImplementedError(f"Sequence parallel with world_size={self.sp_world_size} is not implemented yet")
             img_seq_len = hidden_states.shape[1]
             txt_seq_len = encoder_hidden_states.shape[1]
 
@@ -971,7 +1169,7 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
                 hidden_states = hidden_states + self.previous_residual
             else:
                 ori_hidden_states = hidden_states.clone()
-
+                hidden_states, rope_freqs = self.sequence_parallel_split(hidden_states, rope_freqs)
                 for block_id, block in enumerate(self.transformer_blocks):
                     hidden_states, encoder_hidden_states = self.gradient_checkpointing_method(
                         block,
@@ -991,9 +1189,11 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
                         attention_mask,
                         rope_freqs
                     )
+                hidden_states = self.sequence_parallel_allgather(hidden_states)
 
                 self.previous_residual = hidden_states - ori_hidden_states
         else:
+            hidden_states, rope_freqs = self.sequence_parallel_split(hidden_states, rope_freqs)
             for block_id, block in enumerate(self.transformer_blocks):
                 hidden_states, encoder_hidden_states = self.gradient_checkpointing_method(
                     block,
@@ -1013,6 +1213,7 @@ class HunyuanVideoTransformer3DModelPacked(ModelMixin, ConfigMixin, PeftAdapterM
                     attention_mask,
                     rope_freqs
                 )
+            hidden_states = self.sequence_parallel_allgather(hidden_states)
 
         hidden_states = self.gradient_checkpointing_method(self.norm_out, hidden_states, temb)
 
