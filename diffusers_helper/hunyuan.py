@@ -1,8 +1,15 @@
 import torch
+from diffusers.pipelines.hunyuan_video.pipeline_hunyuan_video import (
+    DEFAULT_PROMPT_TEMPLATE,
+)
+from xfuser.core.distributed import (
+    get_sequence_parallel_rank,
+    get_sequence_parallel_world_size,
+)
 
-from diffusers.pipelines.hunyuan_video.pipeline_hunyuan_video import DEFAULT_PROMPT_TEMPLATE
 from diffusers_helper.utils import crop_or_pad_yield_mask
-
+import torch.nn.functional as F
+import math
 
 @torch.no_grad()
 def encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2, max_length=256):
@@ -103,6 +110,106 @@ def vae_decode(latents, vae, image_mode=False):
 
     return image
 
+def blend_v(a: torch.Tensor, b: torch.Tensor, blend_extent: int) -> torch.Tensor:
+    blend_extent = min(a.shape[-2], b.shape[-2], blend_extent)
+    for y in range(blend_extent):
+        b[:, :, :, y, :] = a[:, :, :, -blend_extent + y, :] * (1 - y / blend_extent) + b[:, :, :, y, :] * (
+            y / blend_extent
+        )
+    return b
+
+@torch.no_grad()
+def vae_decode_parallel(latents, vae, image_mode=False):
+    world_size = get_sequence_parallel_world_size()
+    rank = get_sequence_parallel_rank()
+    latents = latents / vae.config.scaling_factor
+
+    if not image_mode:
+        if world_size > 1:
+            # Distributed processing: split height dimension across GPUs
+            blend_height = 4
+            stride_height = math.ceil(latents.shape[3] / world_size)
+            tile_height = blend_height + stride_height
+            compression_rate = 8
+            img_height_per_gpu = stride_height * compression_rate
+            
+            start_idx = rank * stride_height
+            end_idx = start_idx + tile_height
+            
+            local_latents = latents[:, :, :, start_idx:end_idx, :].to(
+                device=vae.device, dtype=vae.dtype
+            )
+            local_image = vae.decode(local_latents).sample
+            
+            if local_image.shape[3] != tile_height * compression_rate:
+                local_image = F.pad(
+                    local_image, 
+                    (0, 0, 0, tile_height * compression_rate - local_image.shape[3])
+                )
+
+            # Gather results from all GPUs
+            gathered_images = [torch.zeros_like(local_image) for _ in range(world_size)]
+            torch.distributed.all_gather(gathered_images, local_image)
+            
+            # Reconstruct full image with blending at boundaries
+            image_list = []
+            for i, local_image in enumerate(gathered_images):
+                if i > 0:
+                    # Apply blending between adjacent GPU boundaries
+                    local_image = blend_v(gathered_images[i-1], local_image, blend_height * 8)
+
+                image_list.append(local_image[:, :, :, :img_height_per_gpu, :])
+            # Concatenate all processed portions
+            image = torch.cat(image_list, dim=3)
+        else:
+            # Single GPU processing
+            image = vae.decode(latents.to(device=vae.device, dtype=vae.dtype)).sample
+    else:
+        if world_size > 1:
+            # Distributed processing for image mode
+            blend_height = 4
+            stride_height = math.ceil(latents.shape[3] / world_size)
+            tile_height = blend_height + stride_height
+            compression_rate = 8
+            img_height_per_gpu = stride_height * compression_rate  # Should be 192
+
+            start_idx = rank * stride_height
+            end_idx = start_idx + tile_height
+            
+            local_latents = latents[:, :, :, start_idx:end_idx, :].to(
+                device=vae.device, dtype=vae.dtype
+            )
+            local_latents = local_latents.to(device=vae.device, dtype=vae.dtype).unbind(2)
+            local_image = [vae.decode(l.unsqueeze(2)).sample for l in local_latents]
+            local_image = torch.cat(local_image, dim=2)
+            
+            if local_image.shape[3] != tile_height * compression_rate:
+                local_image = F.pad(
+                    local_image, 
+                    (0, 0, 0, tile_height * compression_rate - local_image.shape[3])
+                )
+
+            # Gather results from all GPUs
+            gathered_images = [torch.zeros_like(local_image) for _ in range(world_size)]
+            torch.distributed.all_gather(gathered_images, local_image)
+            
+            # Reconstruct full image with blending at boundaries
+            image_list = []
+            for i, local_image in enumerate(gathered_images):
+                if i > 0:
+                    # Apply blending between adjacent GPU boundaries
+                    local_image = blend_v(gathered_images[i-1], local_image, blend_height * 8)
+                
+                image_list.append(local_image[:, :, :, :img_height_per_gpu, :])
+            
+            # Concatenate all processed portions
+            image = torch.cat(image_list, dim=3)
+        else:
+            # Single GPU processing for image mode
+            image = [vae.decode(latent.unsqueeze(2)).sample for latent in latents]
+            image = torch.cat(image, dim=2)
+   
+    return image
 
 @torch.no_grad()
 def vae_encode(image, vae):
