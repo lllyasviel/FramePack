@@ -30,9 +30,6 @@ class GenerationRequest(BaseModel):
     n_prompt: str = ""
     image_url_or_path: str
     task_id: str
-    loop_video_path: str = None
-    webp_video_path: str = None
-    loop_webp_video_path: str = None
     callback_url: Optional[str] = None
     seed: int = random.randint(0, sys.maxsize)
     total_second_length: float = 5.0
