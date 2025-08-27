@@ -139,9 +139,7 @@ def vae_decode_parallel(latents, vae, image_mode=False):
             local_latents = latents[:, :, :, start_idx:end_idx, :].to(
                 device=vae.device, dtype=vae.dtype
             )
-            local_latents = local_latents.to(device=vae.device, dtype=vae.dtype).unbind(2)
-            local_image = [vae.decode(l.unsqueeze(2)).sample for l in local_latents]
-            local_image = torch.cat(local_image, dim=2)
+            local_image = vae.decode(local_latents).sample
             
             if local_image.shape[3] != tile_height * compression_rate:
                 local_image = F.pad(
@@ -167,8 +165,6 @@ def vae_decode_parallel(latents, vae, image_mode=False):
             # Single GPU processing
             image = vae.decode(latents.to(device=vae.device, dtype=vae.dtype)).sample
     else:
-        latents = latents.to(device=vae.device, dtype=vae.dtype).unbind(2)
-        
         if world_size > 1:
             # Distributed processing for image mode
             blend_height = 4
@@ -183,7 +179,9 @@ def vae_decode_parallel(latents, vae, image_mode=False):
             local_latents = latents[:, :, :, start_idx:end_idx, :].to(
                 device=vae.device, dtype=vae.dtype
             )
-            local_image = vae.decode(local_latents).sample
+            local_latents = local_latents.to(device=vae.device, dtype=vae.dtype).unbind(2)
+            local_image = [vae.decode(l.unsqueeze(2)).sample for l in local_latents]
+            local_image = torch.cat(local_image, dim=2)
             
             if local_image.shape[3] != tile_height * compression_rate:
                 local_image = F.pad(

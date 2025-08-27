@@ -15,7 +15,6 @@ import requests
 import torch
 from cachetools import LRUCache
 from fastapi import HTTPException
-from pyinstrument import Profiler
 
 from utils import GenerationTask, setup_logging
 
