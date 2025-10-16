@@ -4,7 +4,7 @@
 
 # FramePack
 
-Official implementation and desktop software for ["Packing Input Frame Context in Next-Frame Prediction Models for Video Generation"](https://lllyasviel.github.io/frame_pack_gitpage/).
+Official implementation and desktop software for ["Frame Context Packing and Drift Prevention in Next-Frame-Prediction Video Diffusion Models"](https://lllyasviel.github.io/frame_pack_gitpage/).
 
 Links: [**Paper**](https://arxiv.org/abs/2504.12626), [**Project Page**](https://lllyasviel.github.io/frame_pack_gitpage/)
 
@@ -478,6 +478,14 @@ You can also write prompts yourself. Concise prompts are usually preferred, for 
 and so on.
 
 # Cite
+
+    @inproceedings{
+        zhang2025framepack,
+        title={Frame Context Packing and Drift Prevention in Next-Frame-Prediction Video Diffusion Models},
+        author={Lvmin Zhang and Shengqu Cai and Muyang Li and Gordon Wetzstein and Maneesh Agrawala},
+        booktitle={The Thirty-ninth Annual Conference on Neural Information Processing Systems},
+        year={2025},
+    }
 
     @article{zhang2025framepack,
         title={Packing Input Frame Contexts in Next-Frame Prediction Models for Video Generation},
