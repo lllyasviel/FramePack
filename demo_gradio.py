@@ -68,7 +68,6 @@ if not high_vram:
     vae.enable_tiling()
 
 transformer.high_quality_fp32_output_for_inference = True
-print('transformer.high_quality_fp32_output_for_inference = True')
 
 transformer.to(dtype=torch.bfloat16)
 vae.to(dtype=torch.float16)
@@ -98,6 +97,22 @@ stream = AsyncStream()
 outputs_folder = './outputs/'
 os.makedirs(outputs_folder, exist_ok=True)
 
+def _encode_prompt_and_generate_attention_mask(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2):
+    prompts = prompt.split(';')
+    llama_vecs = []
+    clip_l_poolers = []
+    llama_attention_masks = []
+    for prompt in prompts:
+        llama_vec, clip_l_pooler = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
+
+        llama_vec, llama_attention_mask = crop_or_pad_yield_mask(llama_vec, length=512)
+        llama_vec = llama_vec.to(transformer.dtype)
+        clip_l_pooler = clip_l_pooler.to(transformer.dtype)
+        llama_attention_masks.append(llama_attention_mask)
+        llama_vecs.append(llama_vec)
+        clip_l_poolers.append(clip_l_pooler)
+    return list(llama_vecs), list(clip_l_poolers), list(llama_attention_masks)
+
 
 @torch.no_grad()
 def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
@@ -123,14 +138,13 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             fake_diffusers_current_device(text_encoder, gpu)  # since we only encode one text - that is one model move and one encode, offload is same time consumption since it is also one load and one encode.
             load_model_as_complete(text_encoder_2, target_device=gpu)
 
-        llama_vec, clip_l_pooler = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
+        llama_vecs, clip_l_poolers, llama_attention_masks = _encode_prompt_and_generate_attention_mask(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
 
         if cfg == 1:
-            llama_vec_n, clip_l_pooler_n = torch.zeros_like(llama_vec), torch.zeros_like(clip_l_pooler)
+            llama_vec_n, clip_l_pooler_n = torch.zeros_like(llama_vecs[0]), torch.zeros_like(clip_l_poolers[0])
         else:
             llama_vec_n, clip_l_pooler_n = encode_prompt_conds(n_prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
 
-        llama_vec, llama_attention_mask = crop_or_pad_yield_mask(llama_vec, length=512)
         llama_vec_n, llama_attention_mask_n = crop_or_pad_yield_mask(llama_vec_n, length=512)
 
         # Processing input image
@@ -140,7 +154,6 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         H, W, C = input_image.shape
         height, width = find_nearest_bucket(H, W, resolution=640)
         input_image_np = resize_and_center_crop(input_image, target_width=width, target_height=height)
-
         Image.fromarray(input_image_np).save(os.path.join(outputs_folder, f'{job_id}.png'))
 
         input_image_pt = torch.from_numpy(input_image_np).float() / 127.5 - 1
@@ -166,10 +179,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         image_encoder_last_hidden_state = image_encoder_output.last_hidden_state
 
         # Dtype
-
-        llama_vec = llama_vec.to(transformer.dtype)
         llama_vec_n = llama_vec_n.to(transformer.dtype)
-        clip_l_pooler = clip_l_pooler.to(transformer.dtype)
         clip_l_pooler_n = clip_l_pooler_n.to(transformer.dtype)
         image_encoder_last_hidden_state = image_encoder_last_hidden_state.to(transformer.dtype)
 
@@ -192,6 +202,10 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             # One can try to remove below trick and just
             # use `latent_paddings = list(reversed(range(total_latent_sections)))` to compare
             latent_paddings = [3] + [2] * (total_latent_sections - 3) + [1, 0]
+
+        first_llama_vec = llama_vecs[0]
+        first_clip_l_pooler = clip_l_poolers[0]
+        first_llama_attention_mask = llama_attention_masks[0]
 
         for latent_padding in latent_paddings:
             is_last_section = latent_padding == 0
@@ -250,9 +264,9 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 # shift=3.0,
                 num_inference_steps=steps,
                 generator=rnd,
-                prompt_embeds=llama_vec,
-                prompt_embeds_mask=llama_attention_mask,
-                prompt_poolers=clip_l_pooler,
+                prompt_embeds=llama_vecs.pop() if llama_vecs else first_llama_vec,
+                prompt_embeds_mask=llama_attention_masks.pop() if llama_attention_masks else first_llama_attention_mask,
+                prompt_poolers=clip_l_poolers.pop() if clip_l_poolers else first_clip_l_pooler,
                 negative_prompt_embeds=llama_vec_n,
                 negative_prompt_embeds_mask=llama_attention_mask_n,
                 negative_prompt_poolers=clip_l_pooler_n,
@@ -360,8 +374,8 @@ with block:
     gr.Markdown('# FramePack')
     with gr.Row():
         with gr.Column():
-            input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)
-            prompt = gr.Textbox(label="Prompt", value='')
+            input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)            
+            prompt = gr.Textbox(label="Prompt 1", value='', lines=5)
             example_quick_prompts = gr.Dataset(samples=quick_prompts, label='Quick List', samples_per_page=1000, components=[prompt])
             example_quick_prompts.click(lambda x: x[0], inputs=[example_quick_prompts], outputs=prompt, show_progress=False, queue=False)
 
