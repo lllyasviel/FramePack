@@ -479,15 +479,14 @@ and so on.
 
 # Cite
 
-    @inproceedings{
-        zhang2025framepack,
+    @inproceedings{zhang2025framepack,
         title={Frame Context Packing and Drift Prevention in Next-Frame-Prediction Video Diffusion Models},
         author={Lvmin Zhang and Shengqu Cai and Muyang Li and Gordon Wetzstein and Maneesh Agrawala},
         booktitle={The Thirty-ninth Annual Conference on Neural Information Processing Systems},
         year={2025},
     }
 
-    @article{zhang2025framepack,
+    @article{zhang2025framepackv1,
         title={Packing Input Frame Contexts in Next-Frame Prediction Models for Video Generation},
         author={Lvmin Zhang and Maneesh Agrawala},
         journal={Arxiv},
