@@ -1,4 +1,10 @@
 from diffusers_helper.hf_login import login
+from diffusers_helper.device_config import (
+    get_device,
+    configure_m3_optimizations,
+    get_model_dtype,
+    handle_device_specific_errors
+)
 
 import os
 
@@ -27,7 +33,6 @@ from transformers import SiglipImageProcessor, SiglipVisionModel
 from diffusers_helper.clip_vision import hf_clip_vision_encode
 from diffusers_helper.bucket_tools import find_nearest_bucket
 
-
 parser = argparse.ArgumentParser()
 parser.add_argument('--share', action='store_true')
 parser.add_argument("--server", type=str, default='0.0.0.0')
@@ -40,58 +45,93 @@ args = parser.parse_args()
 
 print(args)
 
-free_mem_gb = get_cuda_free_memory_gb(gpu)
-high_vram = free_mem_gb > 60
+# Get device and configure optimizations
+device = get_device()
+high_vram, gpu_memory_preservation = configure_m3_optimizations()
+model_dtype = get_model_dtype()
 
-print(f'Free VRAM {free_mem_gb} GB')
+print(f'Using device: {device}')
 print(f'High-VRAM Mode: {high_vram}')
+print(f'Model dtype: {model_dtype}')
 
-text_encoder = LlamaModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder', torch_dtype=torch.float16).cpu()
-text_encoder_2 = CLIPTextModel.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='text_encoder_2', torch_dtype=torch.float16).cpu()
-tokenizer = LlamaTokenizerFast.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='tokenizer')
-tokenizer_2 = CLIPTokenizer.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='tokenizer_2')
-vae = AutoencoderKLHunyuanVideo.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='vae', torch_dtype=torch.float16).cpu()
+# Load models with M3-optimized settings
+text_encoder = LlamaModel.from_pretrained(
+    "hunyuanvideo-community/HunyuanVideo",
+    subfolder='text_encoder',
+    torch_dtype=model_dtype
+).to(device)
 
-feature_extractor = SiglipImageProcessor.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='feature_extractor')
-image_encoder = SiglipVisionModel.from_pretrained("lllyasviel/flux_redux_bfl", subfolder='image_encoder', torch_dtype=torch.float16).cpu()
+text_encoder_2 = CLIPTextModel.from_pretrained(
+    "hunyuanvideo-community/HunyuanVideo",
+    subfolder='text_encoder_2',
+    torch_dtype=model_dtype
+).to(device)
 
-transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained('lllyasviel/FramePackI2V_HY', torch_dtype=torch.bfloat16).cpu()
+tokenizer = LlamaTokenizerFast.from_pretrained(
+    "hunyuanvideo-community/HunyuanVideo",
+    subfolder='tokenizer'
+)
 
+tokenizer_2 = CLIPTokenizer.from_pretrained(
+    "hunyuanvideo-community/HunyuanVideo",
+    subfolder='tokenizer_2'
+)
+
+vae = AutoencoderKLHunyuanVideo.from_pretrained(
+    "hunyuanvideo-community/HunyuanVideo",
+    subfolder='vae',
+    torch_dtype=model_dtype
+).to(device)
+
+feature_extractor = SiglipImageProcessor.from_pretrained(
+    "lllyasviel/flux_redux_bfl",
+    subfolder='feature_extractor'
+)
+
+image_encoder = SiglipVisionModel.from_pretrained(
+    "lllyasviel/flux_redux_bfl",
+    subfolder='image_encoder',
+    torch_dtype=model_dtype
+).to(device)
+
+transformer = HunyuanVideoTransformer3DModelPacked.from_pretrained(
+    'lllyasviel/FramePackI2V_HY',
+    torch_dtype=model_dtype
+).to(device)
+
+# Set models to eval mode
 vae.eval()
 text_encoder.eval()
 text_encoder_2.eval()
 image_encoder.eval()
 transformer.eval()
 
+# Configure memory optimizations
 if not high_vram:
     vae.enable_slicing()
     vae.enable_tiling()
 
+# Set transformer quality settings
 transformer.high_quality_fp32_output_for_inference = True
 print('transformer.high_quality_fp32_output_for_inference = True')
 
-transformer.to(dtype=torch.bfloat16)
-vae.to(dtype=torch.float16)
-image_encoder.to(dtype=torch.float16)
-text_encoder.to(dtype=torch.float16)
-text_encoder_2.to(dtype=torch.float16)
-
+# Disable gradients
 vae.requires_grad_(False)
 text_encoder.requires_grad_(False)
 text_encoder_2.requires_grad_(False)
 image_encoder.requires_grad_(False)
 transformer.requires_grad_(False)
 
+# Configure model loading based on memory availability
 if not high_vram:
-    # DynamicSwapInstaller is same as huggingface's enable_sequential_offload but 3x faster
-    DynamicSwapInstaller.install_model(transformer, device=gpu)
-    DynamicSwapInstaller.install_model(text_encoder, device=gpu)
+    DynamicSwapInstaller.install_model(transformer, device=device)
+    DynamicSwapInstaller.install_model(text_encoder, device=device)
 else:
-    text_encoder.to(gpu)
-    text_encoder_2.to(gpu)
-    image_encoder.to(gpu)
-    vae.to(gpu)
-    transformer.to(gpu)
+    text_encoder.to(device)
+    text_encoder_2.to(device)
+    image_encoder.to(device)
+    vae.to(device)
+    transformer.to(device)
 
 stream = AsyncStream()
 
@@ -120,8 +160,8 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Text encoding ...'))))
 
         if not high_vram:
-            fake_diffusers_current_device(text_encoder, gpu)  # since we only encode one text - that is one model move and one encode, offload is same time consumption since it is also one load and one encode.
-            load_model_as_complete(text_encoder_2, target_device=gpu)
+            fake_diffusers_current_device(text_encoder, device)  # since we only encode one text - that is one model move and one encode, offload is same time consumption since it is also one load and one encode.
+            load_model_as_complete(text_encoder_2, target_device=device)
 
         llama_vec, clip_l_pooler = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
 
@@ -151,7 +191,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'VAE encoding ...'))))
 
         if not high_vram:
-            load_model_as_complete(vae, target_device=gpu)
+            load_model_as_complete(vae, target_device=device)
 
         start_latent = vae_encode(input_image_pt, vae)
 
@@ -160,7 +200,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
 
         if not high_vram:
-            load_model_as_complete(image_encoder, target_device=gpu)
+            load_model_as_complete(image_encoder, target_device=device)
 
         image_encoder_output = hf_clip_vision_encode(input_image_np, feature_extractor, image_encoder)
         image_encoder_last_hidden_state = image_encoder_output.last_hidden_state
@@ -213,7 +253,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
             if not high_vram:
                 unload_complete_models()
-                move_model_to_device_with_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
+                move_model_to_device_with_memory_preservation(transformer, target_device=device, preserved_memory_gb=gpu_memory_preservation)
 
             if use_teacache:
                 transformer.initialize_teacache(enable_teacache=True, num_steps=steps)
@@ -256,7 +296,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 negative_prompt_embeds=llama_vec_n,
                 negative_prompt_embeds_mask=llama_attention_mask_n,
                 negative_prompt_poolers=clip_l_pooler_n,
-                device=gpu,
+                device=device,
                 dtype=torch.bfloat16,
                 image_embeddings=image_encoder_last_hidden_state,
                 latent_indices=latent_indices,
@@ -276,8 +316,8 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
 
             if not high_vram:
-                offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
-                load_model_as_complete(vae, target_device=gpu)
+                offload_model_from_device_for_memory_preservation(transformer, target_device=device, preserved_memory_gb=8)
+                load_model_as_complete(vae, target_device=device)
 
             real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
 

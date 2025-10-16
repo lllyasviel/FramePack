@@ -26,7 +26,7 @@ FramePack can be trained with a much larger batch size, similar to the batch siz
 
 **2025 May 03:** The FramePack-F1 is released. [Try it here.](https://github.com/lllyasviel/FramePack/discussions/459)
 
-Note that this GitHub repository is the only official FramePack website. We do not have any web services. All other websites are spam and fake, including but not limited to `framepack.co`, `frame_pack.co`, `framepack.net`, `frame_pack.net`, `framepack.ai`, `frame_pack.ai`, `framepack.pro`, `frame_pack.pro`, `framepack.cc`, `frame_pack.cc`,`framepackai.co`, `frame_pack_ai.co`, `framepackai.net`, `frame_pack_ai.net`, `framepackai.pro`, `frame_pack_ai.pro`, `framepackai.cc`, `frame_pack_ai.cc`, and so on. Again, they are all spam and fake. **Do not pay money or download files from any of those websites.**
+Note that this GitHub repository is the only official FramePack website. We do not have any web services. All other websites are spam and fake, including but not limited to `framepack.co`, `frame_pack.co`, `framepack.net`, `frame_pack.net`, `framepack.ai`, `frame_pack.ai`, `framepack.pro`, `frame_pack.pro`, `framepack.cc`, `framepack.cc`,`framepackai.co`, `frame_pack_ai.co`, `framepackai.net`, `frame_pack_ai.net`, `framepackai.pro`, `frame_pack_ai.pro`, `framepackai.cc`, `frame_pack_ai.cc`, and so on. Again, they are all spam and fake. **Do not pay money or download files from any of those websites.**
 
 # Requirements
 
@@ -48,7 +48,37 @@ In any case, you will directly see the generated frames since it is next-frame(-
 
 # Installation
 
-**Windows**:
+## For M3 Mac Users
+
+1. Install Python 3.10 or newer:
+   ```bash
+   brew install python@3.10
+   ```
+
+2. Create and activate a virtual environment:
+   ```bash
+   python3.10 -m venv venv
+   source venv/bin/activate
+   ```
+
+3. Install PyTorch with MPS support:
+   ```bash
+   pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cpu
+   ```
+
+4. Install other dependencies:
+   ```bash
+   pip install -r requirements_m3.txt
+   ```
+
+5. Run the application:
+   ```bash
+   python demo_gradio.py
+   ```
+
+Note: The application will automatically use Metal Performance Shaders (MPS) on M3 Macs for optimal performance.
+
+## For Windows Users
 
 [>>> Click Here to Download One-Click Package (CUDA 12.6 + Pytorch 2.6) <<<](https://github.com/lllyasviel/FramePack/releases/download/windows/framepack_cu126_torch26.7z)
 
@@ -60,7 +90,7 @@ Note that running `update.bat` is important, otherwise you may be using a previo
 
 Note that the models will be downloaded automatically. You will download more than 30GB from HuggingFace.
 
-**Linux**:
+## For Linux Users
 
 We recommend having an independent Python 3.10.
 
@@ -294,7 +324,7 @@ Below are some more examples that you may be interested in reproducing.
 
 <img src="https://github.com/user-attachments/assets/853f4f40-2956-472f-aa7a-fa50da03ed92" width="150">
 
-`The girl suddenly took out a sign that said “cute” using right hand`
+`The girl suddenly took out a sign that said "cute" using right hand`
 
 ![image](https://github.com/user-attachments/assets/d51180e4-5537-4e25-a6c6-faecae28648a)
 
