@@ -37,6 +37,7 @@ Note that this repo is a functional desktop software with minimal standalone hig
 Requirements:
 
 * Nvidia GPU in RTX 30XX, 40XX, 50XX series that supports fp16 and bf16. The GTX 10XX/20XX are not tested.
+* AMD GPU in Radeon Pro W7900 and 7000 sseries , MI300X with Linux.
 * Linux or Windows operating system.
 * At least 6GB GPU memory.
 
@@ -62,6 +63,10 @@ Note that the models will be downloaded automatically. You will download more th
 
 **Linux**:
 
+We can use both Nvidia GPU with CUDA andd AMD GPU with ROCm.
+
+- For Nvidia GPU,
+
 We recommend having an independent Python 3.10.
 
     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
@@ -80,6 +85,44 @@ For example, to install sage-attention (linux):
     pip install sageattention==1.0.6
 
 However, you are highly recommended to first try without sage-attention since it will influence results, though the influence is minimal.
+
+- For AMD GPU
+
+AMD ROCm™ Software is the open software stack that includes programming models, tools, compilers, libraries, and runtimes for AI and HPC solution development on AMD GPUs. Now ROCm is one installation option of PyTorch from [PyTorch 1.8](https://pytorch.org/blog/pytorch-for-amd-rocm-platform-now-available-as-python-package/). I suppose you have followed the [ROCm installation for Linux](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/) to set up the Linux ROCm environment before going to run FramePack. Next we just need to use PyTorch-ROCm version to replace the PyTorch-CUDA version for AMD ROCm GPU.
+
+```
+pip3 install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/rocm6.4
+pip install -r requirements.txt
+```
+
+To start the GUI（same as with Nvidia GPU), run:
+
+    python demo_gradio.py
+
+AMD also provides out-of-box docker images with PyTorch-ROCm, flash-attn pre-installed for easy usage.
+
+1. https://hub.docker.com/r/rocm/vllm-dev (Pytorch+vLLM pre-installed)
+2. https://hub.docker.com/r/rocm/pytorch (Pytorch pre-installed)
+
+Here is the quick way to run FramePack with the container [use Radeon Pro W7900 GPU as example]
+
+```
+docker pull rocm/vllm-dev:rocm6.4.1_navi_ubuntu22.04_py3.10_pytorch_2.7_vllm_0.8.5
+
+docker run -it --network=host \
+  --device=/dev/kfd --device=/dev/dri/renderD128 \
+  --group-add=video \
+  --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
+  --shm-size 8G --hostname=w7900   -v /DATA:/DATA -w /DATA \
+  rocm/vllm-dev:rocm6.4.1_navi_ubuntu22.04_py3.10_pytorch_2.7_vllm_0.8.5
+
+git clone https://github.com/lllyasviel/FramePack.git
+cd FremePack
+pip install -r requirements.txt
+
+python demo_gradio.py
+```
+You could refer to this [blog](https://medium.com/@alexhe.amd/run-framepack-with-amd-rocm-gpu-e539c5379f36) with steps and tests in details.
 
 # GUI
 
