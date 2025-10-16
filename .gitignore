@@ -139,6 +139,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.venv_FramePack_svc
 
 # Spyder project settings
 .spyderproject
@@ -176,3 +177,16 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Visual Studio cache
+.vs/
+
+# Local helpers
+runsvc.sh
+tmp/
+
+# Created at runtime
+framepack_svc_queue.zip
+hf_download					# to ensure symlink is caught correctly
+hf_download/
+outputs_svc/
