@@ -2,6 +2,9 @@ from diffusers_helper.hf_login import login
 
 import os
 
+# 设置MPS回退环境变量，以处理未实现的操作
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+
 os.environ['HF_HOME'] = os.path.abspath(os.path.realpath(os.path.join(os.path.dirname(__file__), './hf_download')))
 
 import gradio as gr
@@ -20,7 +23,7 @@ from diffusers_helper.hunyuan import encode_prompt_conds, vae_decode, vae_encode
 from diffusers_helper.utils import save_bcthw_as_mp4, crop_or_pad_yield_mask, soft_append_bcthw, resize_and_center_crop, state_dict_weighted_merge, state_dict_offset_merge, generate_timestamp
 from diffusers_helper.models.hunyuan_video_packed import HunyuanVideoTransformer3DModelPacked
 from diffusers_helper.pipelines.k_diffusion_hunyuan import sample_hunyuan
-from diffusers_helper.memory import cpu, gpu, get_cuda_free_memory_gb, move_model_to_device_with_memory_preservation, offload_model_from_device_for_memory_preservation, fake_diffusers_current_device, DynamicSwapInstaller, unload_complete_models, load_model_as_complete
+from diffusers_helper.memory import cpu, gpu, mps, get_cuda_free_memory_gb, get_mps_free_memory_gb, move_model_to_device_with_memory_preservation, offload_model_from_device_for_memory_preservation, fake_diffusers_current_device, DynamicSwapInstaller, unload_complete_models, load_model_as_complete
 from diffusers_helper.thread_utils import AsyncStream, async_run
 from diffusers_helper.gradio.progress_bar import make_progress_bar_css, make_progress_bar_html
 from transformers import SiglipImageProcessor, SiglipVisionModel
@@ -40,7 +43,7 @@ args = parser.parse_args()
 
 print(args)
 
-free_mem_gb = get_cuda_free_memory_gb(gpu)
+free_mem_gb = get_mps_free_memory_gb(mps) if torch.backends.mps.is_available() else get_cuda_free_memory_gb(gpu)
 high_vram = free_mem_gb > 60
 
 print(f'Free VRAM {free_mem_gb} GB')
@@ -84,14 +87,14 @@ transformer.requires_grad_(False)
 
 if not high_vram:
     # DynamicSwapInstaller is same as huggingface's enable_sequential_offload but 3x faster
-    DynamicSwapInstaller.install_model(transformer, device=gpu)
-    DynamicSwapInstaller.install_model(text_encoder, device=gpu)
+    DynamicSwapInstaller.install_model(transformer, device=mps if torch.backends.mps.is_available() else gpu)
+    DynamicSwapInstaller.install_model(text_encoder, device=mps if torch.backends.mps.is_available() else gpu)
 else:
-    text_encoder.to(gpu)
-    text_encoder_2.to(gpu)
-    image_encoder.to(gpu)
-    vae.to(gpu)
-    transformer.to(gpu)
+    text_encoder.to(mps if torch.backends.mps.is_available() else gpu)
+    text_encoder_2.to(mps if torch.backends.mps.is_available() else gpu)
+    image_encoder.to(mps if torch.backends.mps.is_available() else gpu)
+    vae.to(mps if torch.backends.mps.is_available() else gpu)
+    transformer.to(mps if torch.backends.mps.is_available() else gpu)
 
 stream = AsyncStream()
 
@@ -120,8 +123,8 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Text encoding ...'))))
 
         if not high_vram:
-            fake_diffusers_current_device(text_encoder, gpu)  # since we only encode one text - that is one model move and one encode, offload is same time consumption since it is also one load and one encode.
-            load_model_as_complete(text_encoder_2, target_device=gpu)
+            fake_diffusers_current_device(text_encoder, mps if torch.backends.mps.is_available() else gpu)  # since we only encode one text - that is one model move and one encode, offload is same time consumption since it is also one load and one encode.
+            load_model_as_complete(text_encoder_2, target_device=mps if torch.backends.mps.is_available() else gpu)
 
         llama_vec, clip_l_pooler = encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokenizer_2)
 
@@ -151,7 +154,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'VAE encoding ...'))))
 
         if not high_vram:
-            load_model_as_complete(vae, target_device=gpu)
+            load_model_as_complete(vae, target_device=mps if torch.backends.mps.is_available() else gpu)
 
         start_latent = vae_encode(input_image_pt, vae)
 
@@ -160,7 +163,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'CLIP Vision encoding ...'))))
 
         if not high_vram:
-            load_model_as_complete(image_encoder, target_device=gpu)
+            load_model_as_complete(image_encoder, target_device=mps if torch.backends.mps.is_available() else gpu)
 
         image_encoder_output = hf_clip_vision_encode(input_image_np, feature_extractor, image_encoder)
         image_encoder_last_hidden_state = image_encoder_output.last_hidden_state
@@ -213,7 +216,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
             if not high_vram:
                 unload_complete_models()
-                move_model_to_device_with_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=gpu_memory_preservation)
+                move_model_to_device_with_memory_preservation(transformer, target_device=mps if torch.backends.mps.is_available() else gpu, preserved_memory_gb=gpu_memory_preservation)
 
             if use_teacache:
                 transformer.initialize_teacache(enable_teacache=True, num_steps=steps)
@@ -256,7 +259,7 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
                 negative_prompt_embeds=llama_vec_n,
                 negative_prompt_embeds_mask=llama_attention_mask_n,
                 negative_prompt_poolers=clip_l_pooler_n,
-                device=gpu,
+                device=mps if torch.backends.mps.is_available() else gpu,
                 dtype=torch.bfloat16,
                 image_embeddings=image_encoder_last_hidden_state,
                 latent_indices=latent_indices,
@@ -276,8 +279,8 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
             history_latents = torch.cat([generated_latents.to(history_latents), history_latents], dim=2)
 
             if not high_vram:
-                offload_model_from_device_for_memory_preservation(transformer, target_device=gpu, preserved_memory_gb=8)
-                load_model_as_complete(vae, target_device=gpu)
+                offload_model_from_device_for_memory_preservation(transformer, target_device=mps if torch.backends.mps.is_available() else gpu, preserved_memory_gb=8)
+                load_model_as_complete(vae, target_device=mps if torch.backends.mps.is_available() else gpu)
 
             real_history_latents = history_latents[:, :, :total_generated_latent_frames, :, :]
 
@@ -399,7 +402,6 @@ with block:
     ips = [input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf]
     start_button.click(fn=process, inputs=ips, outputs=[result_video, preview_image, progress_desc, progress_bar, start_button, end_button])
     end_button.click(fn=end_process)
-
 
 block.launch(
     server_name=args.server,
