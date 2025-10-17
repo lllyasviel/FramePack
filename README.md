@@ -477,6 +477,12 @@ You can also write prompts yourself. Concise prompts are usually preferred, for 
 
 and so on.
 
+# LoRA
+
+Experimental LoRA support. Retrain of LoRA is necessary. 
+
+Launch with the '--lora path_to_your_lora' argument.
+
 # Cite
 
     @inproceedings{zhang2025framepack,

@@ -13,3 +13,4 @@ torchsde==0.2.6
 einops
 opencv-contrib-python
 safetensors
+peft
