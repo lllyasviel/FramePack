@@ -68,7 +68,6 @@ if not high_vram:
     vae.enable_tiling()
 
 transformer.high_quality_fp32_output_for_inference = True
-print('transformer.high_quality_fp32_output_for_inference = True')
 
 transformer.to(dtype=torch.bfloat16)
 vae.to(dtype=torch.float16)
@@ -100,7 +99,7 @@ os.makedirs(outputs_folder, exist_ok=True)
 
 
 @torch.no_grad()
-def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
+def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, resolution):
     total_latent_sections = (total_second_length * 30) / (latent_window_size * 4)
     total_latent_sections = int(max(round(total_latent_sections), 1))
 
@@ -137,11 +136,16 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
 
         stream.output_queue.push(('progress', (None, '', make_progress_bar_html(0, 'Image processing ...'))))
 
-        H, W, C = input_image.shape
-        height, width = find_nearest_bucket(H, W, resolution=640)
-        input_image_np = resize_and_center_crop(input_image, target_width=width, target_height=height)
 
-        Image.fromarray(input_image_np).save(os.path.join(outputs_folder, f'{job_id}.png'))
+        if input_image is None:
+            input_image = np.zeros((resolution, resolution, 3), dtype=np.uint8)
+            height = width = resolution
+            input_image_np = np.array(input_image)
+        else: 
+            H, W, C = input_image.shape
+            height, width = find_nearest_bucket(H, W, resolution=resolution)
+            input_image_np = resize_and_center_crop(input_image, target_width=width, target_height=height)
+            Image.fromarray(input_image_np).save(os.path.join(outputs_folder, f'{job_id}.png'))
 
         input_image_pt = torch.from_numpy(input_image_np).float() / 127.5 - 1
         input_image_pt = input_image_pt.permute(2, 0, 1)[None, :, None]
@@ -315,15 +319,14 @@ def worker(input_image, prompt, n_prompt, seed, total_second_length, latent_wind
     return
 
 
-def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf):
+def process(input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, resolution):
     global stream
-    assert input_image is not None, 'No input image!'
 
     yield None, None, '', '', gr.update(interactive=False), gr.update(interactive=True)
 
     stream = AsyncStream()
 
-    async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf)
+    async_run(worker, input_image, prompt, n_prompt, seed, total_second_length, latent_window_size, steps, cfg, gs, rs, gpu_memory_preservation, use_teacache, mp4_crf, resolution)
 
     output_filename = None
 
@@ -360,7 +363,8 @@ with block:
     gr.Markdown('# FramePack')
     with gr.Row():
         with gr.Column():
-            input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)
+            input_image = gr.Image(sources='upload', type="numpy", label="Image", height=320)            
+            resolution = gr.Slider(label="Resolution", minimum=240, maximum=720, value=640, step=16)
             prompt = gr.Textbox(label="Prompt", value='')
             example_quick_prompts = gr.Dataset(samples=quick_prompts, label='Quick List', samples_per_page=1000, components=[prompt])
             example_quick_prompts.click(lambda x: x[0], inputs=[example_quick_prompts], outputs=prompt, show_progress=False, queue=False)
