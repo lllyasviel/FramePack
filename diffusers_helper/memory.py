@@ -5,8 +5,44 @@ import torch
 
 
 cpu = torch.device('cpu')
-gpu = torch.device(f'cuda:{torch.cuda.current_device()}')
+gpu = None 
 gpu_complete_modules = []
+
+
+def get_available_gpus():
+    """Returns a list of available CUDA GPUs with their info."""
+    gpus = []
+    if not torch.cuda.is_available():
+        return gpus
+    
+    num_gpus = torch.cuda.device_count()
+    for i in range(num_gpus):
+        device = torch.device(f'cuda:{i}')
+        props = torch.cuda.get_device_properties(device)
+        total_memory_gb = props.total_memory / (1024 ** 3)
+        try:
+            free_memory_gb = get_cuda_free_memory_gb(device)
+        except RuntimeError:
+            free_memory_gb = 0
+        
+        gpus.append({
+            'index': i,
+            'name': props.name,
+            'total_memory': round(total_memory_gb, 2),
+            'free_memory': round(free_memory_gb, 2)
+        })
+    return gpus
+
+def set_gpu_device(index: int):
+    """Sets the global GPU device based on the selected index."""
+    global gpu
+    if torch.cuda.is_available() and 0 <= index < torch.cuda.device_count():
+        gpu = torch.device(f'cuda:{index}')
+        print(f"Global GPU device set to: {gpu}")
+    else:
+        print(f"Error: Invalid GPU index {index} or CUDA not available.")
+        gpu = cpu
+        print("Falling back to CPU.")
 
 
 class DynamicSwapInstaller:
