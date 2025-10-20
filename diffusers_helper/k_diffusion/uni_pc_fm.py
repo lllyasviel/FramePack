@@ -4,6 +4,8 @@
 # Attribution-ShareAlike 4.0 International Licence
 
 
+import os
+
 import torch
 
 from tqdm.auto import trange
@@ -111,7 +113,10 @@ class FlowMatchUniPC:
     def sample(self, x, sigmas, callback=None, disable_pbar=False):
         order = min(3, len(sigmas) - 2)
         model_prev_list, t_prev_list = [], []
-        for i in trange(len(sigmas) - 1, disable=disable_pbar):
+        # Get rank ID from environment variable
+        rank = int(os.environ.get('RANK', 0))
+        
+        for i in trange(len(sigmas) - 1, disable=disable_pbar, desc=f"[Rank {rank}] Sampling"):
             vec_t = sigmas[i].expand(x.shape[0])
 
             if i == 0:
