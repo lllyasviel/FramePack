@@ -60,6 +60,29 @@ Note that running `update.bat` is important, otherwise you may be using a previo
 
 Note that the models will be downloaded automatically. You will download more than 30GB from HuggingFace.
 
+
+**Windows WSL2**:
+#W11->WSL2->Ubuntu 24.04 LTS
+
+    conda create --name FramePack python=3.10
+    conda activate FramePack
+    cd /home/youruserORcreatenewfolder/ #IMPORTANT FOR WSL2 MOVE OUT OF YOUR /MNT/C/USERS/USERNAME. Use internal filesystem instead(VHD). Disk transfer speed increased from 30MB/s -> 700MB/s and it/s 700 to 15 after this change.
+    git clone https://github.com/lllyasviel/FramePack.git
+    cd FramePack
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+    pip install -r requirements.txt
+    
+Optional:
+
+    pip install sageattention
+    pip install flash-attn --no-deps
+    pip install --no-cache-dir xformers --index-url https://download.pytorch.org/whl/cu126 -f https://download.pytorch.org/whl/torch_stable.html
+    
+To start the GUI, run:
+
+    python demo_gradio.py
+
+
 **Linux**:
 
 We recommend having an independent Python 3.10.
