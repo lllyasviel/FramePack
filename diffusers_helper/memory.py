@@ -14,6 +14,8 @@ class DynamicSwapInstaller:
     def _install_module(module: torch.nn.Module, **kwargs):
         original_class = module.__class__
         module.__dict__['forge_backup_original_class'] = original_class
+        if 'quantization_method' not in module.__dict__ and hasattr(module, 'config'):
+            module.__dict__['quantization_method'] = None
 
         def hacked_get_attr(self, name: str):
             if '_parameters' in self.__dict__:
