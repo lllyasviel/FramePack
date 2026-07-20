@@ -8,7 +8,15 @@ accelerate.accelerator.convert_outputs_to_fp32 = lambda x: x
 
 
 def LayerNorm_forward(self, x):
-    return torch.nn.functional.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps).to(x)
+    # Compute in fp32 internally — MPS bf16 accumulation across ~21,000 block
+    # boundaries produces visible colour drift (FramePack PR #170).
+    return torch.nn.functional.layer_norm(
+        x.float(),
+        self.normalized_shape,
+        self.weight.float() if self.weight is not None else None,
+        self.bias.float() if self.bias is not None else None,
+        self.eps,
+    ).to(x.dtype)
 
 
 LayerNorm.forward = LayerNorm_forward
@@ -31,13 +39,14 @@ FP32LayerNorm.forward = FP32LayerNorm_forward
 
 def RMSNorm_forward(self, hidden_states):
     input_dtype = hidden_states.dtype
-    variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
-    hidden_states = hidden_states * torch.rsqrt(variance + self.eps)
+    h = hidden_states.float()
+    variance = h.pow(2).mean(-1, keepdim=True)
+    h = h * torch.rsqrt(variance + self.eps)
 
     if self.weight is None:
-        return hidden_states.to(input_dtype)
+        return h.to(input_dtype)
 
-    return hidden_states.to(input_dtype) * self.weight.to(input_dtype)
+    return (h * self.weight.float()).to(input_dtype)
 
 
 RMSNorm.forward = RMSNorm_forward

@@ -20,14 +20,20 @@ from diffusers_helper.utils import zero_module
 
 enabled_backends = []
 
-if torch.backends.cuda.flash_sdp_enabled():
-    enabled_backends.append("flash")
-if torch.backends.cuda.math_sdp_enabled():
-    enabled_backends.append("math")
-if torch.backends.cuda.mem_efficient_sdp_enabled():
-    enabled_backends.append("mem_efficient")
-if torch.backends.cuda.cudnn_sdp_enabled():
-    enabled_backends.append("cudnn")
+# guard: torch.backends.cuda may be absent or uninitialised on non-CUDA
+_cuda_backends_available = torch.cuda.is_available() and hasattr(torch.backends, 'cuda')
+if _cuda_backends_available:
+    try:
+        if torch.backends.cuda.flash_sdp_enabled():
+            enabled_backends.append("flash")
+        if torch.backends.cuda.math_sdp_enabled():
+            enabled_backends.append("math")
+        if torch.backends.cuda.mem_efficient_sdp_enabled():
+            enabled_backends.append("mem_efficient")
+        if torch.backends.cuda.cudnn_sdp_enabled():
+            enabled_backends.append("cudnn")
+    except Exception:
+        pass
 
 print("Currently enabled native sdp backends:", enabled_backends)
 
@@ -84,7 +90,7 @@ def get_cu_seqlens(text_mask, img_len):
     text_len = text_mask.sum(dim=1)
     max_len = text_mask.shape[1] + img_len
 
-    cu_seqlens = torch.zeros([2 * batch_size + 1], dtype=torch.int32, device="cuda")
+    cu_seqlens = torch.zeros([2 * batch_size + 1], dtype=torch.int32, device=text_mask.device)
 
     for i in range(batch_size):
         s = text_len[i] + img_len
@@ -105,22 +111,51 @@ def apply_rotary_emb_transposed(x, freqs_cis):
     return out
 
 
+# MPS SDPA quality threshold — beyond ~3068 tokens the MPS backend loses
+# bf16 softmax precision, causing feature smearing on fast motion and
+# blocky noise at high resolutions (FramePack PR #170 / #816).
+MPS_SDPA_CHUNK = 3068
+
+
+def _mps_chunked_sdpa(q, k, v):
+    """Chunked SDPA for MPS — fp32 compute to avoid bf16 softmax precision loss.
+
+    MPS bf16 SDPA loses ~2× precision vs fp32 on large sequences (14k+ tokens),
+    manifesting as edge smearing / stutter on fast limb motion.  Converting
+    Q/K/V to fp32 for the attention computation preserves softmax fidelity;
+    the output is cast back to the input dtype for downstream compatibility.
+    M4 Max fp32 GEMM throughput equals bf16 (no fast-path), so the overhead
+    is just the dtype conversion (~1 ms per attention call).
+    """
+    orig_dtype = q.dtype
+    q_fp32 = q.float()
+    L = q.shape[1]
+    if L <= MPS_SDPA_CHUNK:
+        return torch.nn.functional.scaled_dot_product_attention(
+            q_fp32.transpose(1, 2), k.float().transpose(1, 2), v.float().transpose(1, 2)
+        ).transpose(1, 2).to(orig_dtype)
+    q_t, k_t, v_t = q_fp32.transpose(1, 2), k.float().transpose(1, 2), v.float().transpose(1, 2)
+    outs = []
+    for start in range(0, L, MPS_SDPA_CHUNK):
+        end = min(start + MPS_SDPA_CHUNK, L)
+        outs.append(torch.nn.functional.scaled_dot_product_attention(
+            q_t[:, :, start:end], k_t, v_t))
+    return torch.cat(outs, dim=2).transpose(1, 2).to(orig_dtype)
+
+
 def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv):
     if cu_seqlens_q is None and cu_seqlens_kv is None and max_seqlen_q is None and max_seqlen_kv is None:
         if sageattn is not None:
-            x = sageattn(q, k, v, tensor_layout='NHD')
-            return x
-
+            return sageattn(q, k, v, tensor_layout='NHD')
         if flash_attn_func is not None:
-            x = flash_attn_func(q, k, v)
-            return x
-
+            return flash_attn_func(q, k, v)
         if xformers_attn_func is not None:
-            x = xformers_attn_func(q, k, v)
-            return x
-
-        x = torch.nn.functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)).transpose(1, 2)
-        return x
+            return xformers_attn_func(q, k, v)
+        if q.device.type == 'mps':
+            return _mps_chunked_sdpa(q, k, v)
+        return torch.nn.functional.scaled_dot_product_attention(
+            q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+        ).transpose(1, 2)
 
     B, L, H, C = q.shape
 
@@ -132,6 +167,19 @@ def attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seq
         x = sageattn_varlen(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv)
     elif flash_attn_varlen_func is not None:
         x = flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_seqlen_q, max_seqlen_kv)
+    elif q.device.type == 'mps':
+        # MPS: fall back to per-segment chunked SDPA instead of raising
+        outputs = []
+        for i in range(len(cu_seqlens_q) - 1):
+            sq, eq = cu_seqlens_q[i].item(), cu_seqlens_q[i + 1].item()
+            sk, ek = cu_seqlens_kv[i].item(), cu_seqlens_kv[i + 1].item()
+            if eq - sq == 0:
+                continue
+            qi = q[sq:eq].unsqueeze(0)
+            ki = k[sk:ek].unsqueeze(0)
+            vi = v[sk:ek].unsqueeze(0)
+            outputs.append(_mps_chunked_sdpa(qi, ki, vi).squeeze(0))
+        x = torch.cat(outputs, dim=0)
     else:
         raise NotImplementedError('No Attn Installed!')
 

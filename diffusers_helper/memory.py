@@ -5,8 +5,23 @@ import torch
 
 
 cpu = torch.device('cpu')
-gpu = torch.device(f'cuda:{torch.cuda.current_device()}')
+
+# Auto-detect GPU: MPS (Apple Silicon) → CUDA → CPU
+if torch.backends.mps.is_available():
+    gpu = torch.device('mps')
+elif torch.cuda.is_available():
+    gpu = torch.device(f'cuda:{torch.cuda.current_device()}')
+else:
+    gpu = torch.device('cpu')
 gpu_complete_modules = []
+
+
+def _empty_cache():
+    """Clear GPU memory cache — MPS or CUDA."""
+    if gpu.type == 'mps':
+        torch.mps.empty_cache()
+    else:
+        torch.cuda.empty_cache()
 
 
 class DynamicSwapInstaller:
@@ -72,6 +87,16 @@ def get_cuda_free_memory_gb(device=None):
     if device is None:
         device = gpu
 
+    # MPS (Apple Silicon) — unified memory, estimate from system RAM
+    if device.type == 'mps':
+        try:
+            import psutil
+            return psutil.virtual_memory().available * 0.8 / (1024 ** 3)
+        except ImportError:
+            import subprocess
+            result = subprocess.run(['sysctl', '-n', 'hw.memsize'], capture_output=True, text=True)
+            return int(result.stdout.strip()) * 0.6 / (1024 ** 3)
+
     memory_stats = torch.cuda.memory_stats(device)
     bytes_active = memory_stats['active_bytes.all.current']
     bytes_reserved = memory_stats['reserved_bytes.all.current']
@@ -86,14 +111,14 @@ def move_model_to_device_with_memory_preservation(model, target_device, preserve
 
     for m in model.modules():
         if get_cuda_free_memory_gb(target_device) <= preserved_memory_gb:
-            torch.cuda.empty_cache()
+            _empty_cache()
             return
 
         if hasattr(m, 'weight'):
             m.to(device=target_device)
 
     model.to(device=target_device)
-    torch.cuda.empty_cache()
+    _empty_cache()
     return
 
 
@@ -102,14 +127,14 @@ def offload_model_from_device_for_memory_preservation(model, target_device, pres
 
     for m in model.modules():
         if get_cuda_free_memory_gb(target_device) >= preserved_memory_gb:
-            torch.cuda.empty_cache()
+            _empty_cache()
             return
 
         if hasattr(m, 'weight'):
             m.to(device=cpu)
 
     model.to(device=cpu)
-    torch.cuda.empty_cache()
+    _empty_cache()
     return
 
 
@@ -119,7 +144,7 @@ def unload_complete_models(*args):
         print(f'Unloaded {m.__class__.__name__} as complete.')
 
     gpu_complete_modules.clear()
-    torch.cuda.empty_cache()
+    _empty_cache()
     return
 
 

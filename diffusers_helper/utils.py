@@ -276,7 +276,25 @@ def save_bcthw_as_mp4(x, output_filename, fps=10, crf=0):
     x = torch.clamp(x.float(), -1., 1.) * 127.5 + 127.5
     x = x.detach().cpu().to(torch.uint8)
     x = einops.rearrange(x, '(m n) c t h w -> t (m h) (n w) c', n=per_row)
-    torchvision.io.write_video(output_filename, x, fps=fps, video_codec='libx264', options={'crf': str(int(crf))})
+
+    # torchvision ≥0.28 removed write_video; fall back to PyAV
+    if hasattr(torchvision.io, 'write_video'):
+        torchvision.io.write_video(output_filename, x, fps=fps, video_codec='libx264', options={'crf': str(int(crf))})
+    else:
+        import av
+        container = av.open(output_filename, mode='w')
+        stream = container.add_stream('libx264', rate=fps)
+        stream.width = x.shape[2]
+        stream.height = x.shape[1]
+        stream.pix_fmt = 'yuv420p'
+        stream.options = {'crf': str(int(crf))}
+        for frame_np in x.numpy():
+            frame = av.VideoFrame.from_ndarray(frame_np, format='rgb24')
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+        container.close()
     return x
 
 
@@ -318,10 +336,26 @@ def add_tensors_with_padding(tensor1, tensor2):
 
 
 def print_free_mem():
-    torch.cuda.empty_cache()
-    free_mem, total_mem = torch.cuda.mem_get_info(0)
-    free_mem_mb = free_mem / (1024 ** 2)
-    total_mem_mb = total_mem / (1024 ** 2)
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        free_mem, total_mem = torch.cuda.mem_get_info(0)
+        free_mem_mb = free_mem / (1024 ** 2)
+        total_mem_mb = total_mem / (1024 ** 2)
+    elif torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+        try:
+            import psutil
+            vm = psutil.virtual_memory()
+            free_mem_mb = vm.available / (1024 ** 2)
+            total_mem_mb = vm.total / (1024 ** 2)
+        except ImportError:
+            import subprocess
+            result = subprocess.run(['sysctl', '-n', 'hw.memsize'], capture_output=True, text=True)
+            total_mem_mb = int(result.stdout.strip()) / (1024 ** 2)
+            free_mem_mb = total_mem_mb * 0.6
+    else:
+        free_mem_mb = total_mem_mb = 0
     print(f"Free memory: {free_mem_mb:.2f} MB")
     print(f"Total memory: {total_mem_mb:.2f} MB")
     return
