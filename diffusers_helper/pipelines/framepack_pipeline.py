@@ -25,7 +25,7 @@ def get_flux_sigmas_from_mu(n, mu):
 
 
 @torch.inference_mode()
-def sample_hunyuan(
+def sample_framepack(
         transformer,
         sampler='unipc',
         initial_latent=None,
@@ -81,7 +81,8 @@ def sample_hunyuan(
     if concat_latent is not None:
         concat_latent = concat_latent.to(latents)
 
-    distilled_guidance = torch.tensor([distilled_guidance_scale * 1000.0] * batch_size).to(device=device, dtype=dtype)
+    # Optimization: Replaced torch.tensor([...]) with torch.full(...) to avoid implicit CPU-GPU synchronization.
+    distilled_guidance = torch.full((batch_size,), distilled_guidance_scale * 1000.0, device=device, dtype=dtype)
 
     prompt_embeds = repeat_to_batch_size(prompt_embeds, batch_size)
     prompt_embeds_mask = repeat_to_batch_size(prompt_embeds_mask, batch_size)

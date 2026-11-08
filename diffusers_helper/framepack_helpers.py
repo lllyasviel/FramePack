@@ -27,8 +27,10 @@ def encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokeniz
     )
 
     llama_input_ids = llama_inputs.input_ids.to(text_encoder.device)
+
+    # Optimization: Calculate sum on CPU before moving to device to avoid blocking CPU-GPU synchronization.
+    llama_attention_length = int(llama_inputs.attention_mask.sum())
     llama_attention_mask = llama_inputs.attention_mask.to(text_encoder.device)
-    llama_attention_length = int(llama_attention_mask.sum())
 
     llama_outputs = text_encoder(
         input_ids=llama_input_ids,
@@ -58,31 +60,39 @@ def encode_prompt_conds(prompt, text_encoder, text_encoder_2, tokenizer, tokeniz
     return llama_vec, clip_l_pooler
 
 
+_vae_decode_fake_cache = {}
+_latent_rgb_factors = [
+    [-0.0395, -0.0331, 0.0445],
+    [0.0696, 0.0795, 0.0518],
+    [0.0135, -0.0945, -0.0282],
+    [0.0108, -0.0250, -0.0765],
+    [-0.0209, 0.0032, 0.0224],
+    [-0.0804, -0.0254, -0.0639],
+    [-0.0991, 0.0271, -0.0669],
+    [-0.0646, -0.0422, -0.0400],
+    [-0.0696, -0.0595, -0.0894],
+    [-0.0799, -0.0208, -0.0375],
+    [0.1166, 0.1627, 0.0962],
+    [0.1165, 0.0432, 0.0407],
+    [-0.2315, -0.1920, -0.1355],
+    [-0.0270, 0.0401, -0.0821],
+    [-0.0616, -0.0997, -0.0727],
+    [0.0249, -0.0469, -0.1703]
+]  # From comfyui
+_latent_rgb_factors_bias = [0.0259, -0.0192, -0.0761]
+
+
 @torch.no_grad()
 def vae_decode_fake(latents):
-    latent_rgb_factors = [
-        [-0.0395, -0.0331, 0.0445],
-        [0.0696, 0.0795, 0.0518],
-        [0.0135, -0.0945, -0.0282],
-        [0.0108, -0.0250, -0.0765],
-        [-0.0209, 0.0032, 0.0224],
-        [-0.0804, -0.0254, -0.0639],
-        [-0.0991, 0.0271, -0.0669],
-        [-0.0646, -0.0422, -0.0400],
-        [-0.0696, -0.0595, -0.0894],
-        [-0.0799, -0.0208, -0.0375],
-        [0.1166, 0.1627, 0.0962],
-        [0.1165, 0.0432, 0.0407],
-        [-0.2315, -0.1920, -0.1355],
-        [-0.0270, 0.0401, -0.0821],
-        [-0.0616, -0.0997, -0.0727],
-        [0.0249, -0.0469, -0.1703]
-    ]  # From comfyui
-
-    latent_rgb_factors_bias = [0.0259, -0.0192, -0.0761]
-
-    weight = torch.tensor(latent_rgb_factors, device=latents.device, dtype=latents.dtype).transpose(0, 1)[:, :, None, None, None]
-    bias = torch.tensor(latent_rgb_factors_bias, device=latents.device, dtype=latents.dtype)
+    # ⚡ Bolt Optimization: Cache the weight and bias tensors to prevent unnecessary
+    # re-allocation and conversion on every call. This reduces overhead in hot loops.
+    cache_key = (latents.device, latents.dtype)
+    if cache_key not in _vae_decode_fake_cache:
+        weight = torch.tensor(_latent_rgb_factors, device=latents.device, dtype=latents.dtype).transpose(0, 1)[:, :, None, None, None]
+        bias = torch.tensor(_latent_rgb_factors_bias, device=latents.device, dtype=latents.dtype)
+        _vae_decode_fake_cache[cache_key] = (weight, bias)
+    else:
+        weight, bias = _vae_decode_fake_cache[cache_key]
 
     images = torch.nn.functional.conv3d(latents, weight, bias=bias, stride=1, padding=0, dilation=1, groups=1)
     images = images.clamp(0.0, 1.0)

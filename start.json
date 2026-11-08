@@ -1,0 +1,24 @@
+{
+    "run": [
+        {
+            "method": "shell.run",
+            "params": {
+                "message": [
+                    ".venv/Scripts/python.exe demo_gradio.py"
+                ],
+                "on": [
+                    {
+                        "event": "/http:\\/\\/[0-9.]+:7860/",
+                        "done": true
+                    }
+                ]
+            }
+        },
+        {
+            "method": "browser.open",
+            "params": {
+                "uri": "{{event.after}}"
+            }
+        }
+    ]
+}

@@ -1,0 +1,36 @@
+Currently enabled native sdp backends: ['flash', 'math', 'mem_efficient']
+Xformers is not installed!
+Flash Attn is not installed!
+Sage Attn is not installed!
+AMD DirectML Device detected: privateuseone:0
+[NPU] Orchestrator ready for Strix Point XDNA 2.
+Namespace(share=False, server='0.0.0.0', port=None, inbrowser=False)
+Free VRAM 60.0 GB
+High-VRAM Mode: False
+Downloading shards:   0%| Downloading shards:   0%| 
+Traceback (most recent call last):
+  File "C:\Users\Bobby\.gemini\antigravity\scratch\FramePack\demo_gradio.py", line 73, in <module>
+    vae = AutoencoderKLHunyuanVideo.from_pretrained("hunyuanvideo-community/HunyuanVideo", subfolder='vae', torch_dtype=torch.float16).cpu()
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Bobby\.gemini\antigravity\scratch\FramePack\.venv\Lib\site-packages\transformers\modeling_utils.py", line 3974, in from_pretrained
+    resolved_archive_file, sharded_metadata = get_checkpoint_shard_files(
+                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Bobby\.gemini\antigravity\scratch\FramePack\.venv\Lib\site-packages\transformers\utils\hub.py", line 1098, in get_checkpoint_shard_files
+    cached_filename = cached_file(
+                      ^^^^^^^^^^^^
+  File "C:\Users\Bobby\.gemini\antigravity\scratch\FramePack\.venv\Lib\site-packages\transformers\utils\hub.py", line 403, in cached_file
+    resolved_file = hf_hub_download(
+                    ^^^^^^^^^^^^^^^^
+  File "C:\Users\Bobby\.gemini\antigravity\scratch\FramePack\.venv\Lib\site-packages\huggingface_hub\utils\_validators.py", line 114, in _inner_fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Bobby\.gemini\antigravity\scratch\FramePack\.venv\Lib\site-packages\huggingface_hub\file_download.py", line 1007, in hf_hub_download
+    return _hf_hub_download_to_cache_dir(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Bobby\.gemini\antigravity\scratch\FramePack\.venv\Lib\site-packages\huggingface_hub\file_download.py", line 1168, in _hf_hub_download_to_cache_dir
+    _download_to_tmp_and_move(
+  File "C:\Users\Bobby\.gemini\antigravity\scratch\FramePack\.venv\Lib\site-packages\huggingface_hub\file_download.py", line 1720, in _download_to_tmp_and_move
+    xet_get(
+  File "C:\Users\Bobby\.gemini\antigravity\scratch\FramePack\.venv\Lib\site-packages\huggingface_hub\file_download.py", line 626, in xet_get
+    download_files(
+KeyboardInterrupt

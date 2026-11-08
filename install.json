@@ -1,0 +1,18 @@
+{
+    "run": [
+        {
+            "method": "shell.run",
+            "params": {
+                "message": [
+                    "python setup_amd.py"
+                ]
+            }
+        },
+        {
+            "method": "notify",
+            "params": {
+                "html": "AMD Environment Setup Complete! You can now start the Studio."
+            }
+        }
+    ]
+}
