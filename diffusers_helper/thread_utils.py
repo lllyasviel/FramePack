@@ -30,10 +30,9 @@ class Listener:
     def add_task(cls, func, *args, **kwargs):
         with cls.lock:
             cls.task_queue.append((func, args, kwargs))
-
-        if cls.thread is None:
-            cls.thread = Thread(target=cls._process_tasks, daemon=True)
-            cls.thread.start()
+            if cls.thread is None:
+                cls.thread = Thread(target=cls._process_tasks, daemon=True)
+                cls.thread.start()
 
 
 def async_run(func, *args, **kwargs):
